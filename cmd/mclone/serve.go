@@ -98,6 +98,7 @@ var serveCmd = &cobra.Command{
 		}
 
 		port, _ := cmd.Flags().GetInt("port")
+		overrideModel, _ := cmd.Flags().GetString("model")
 
 		conf, err := config.LoadConfig()
 		if err != nil {
@@ -125,12 +126,17 @@ var serveCmd = &cobra.Command{
 				return
 			}
 
+			model := req.Model
+			if overrideModel != "" {
+				model = overrideModel
+			}
+
 			var msgs []llms.MessageContent
 			for _, m := range req.Messages {
 				msgs = append(msgs, m.ToLangChain())
 			}
 
-			respChan, err := p.Chat(r.Context(), req.Model, msgs)
+			respChan, err := p.Chat(r.Context(), model, msgs)
 			if err != nil {
 				slog.Error("openai chat failed", "error", err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -196,12 +202,17 @@ var serveCmd = &cobra.Command{
 				return
 			}
 
+			model := req.Model
+			if overrideModel != "" {
+				model = overrideModel
+			}
+
 			var msgs []llms.MessageContent
 			for _, m := range req.Messages {
 				msgs = append(msgs, m.ToLangChain())
 			}
 
-			respChan, err := p.Chat(r.Context(), req.Model, msgs)
+			respChan, err := p.Chat(r.Context(), model, msgs)
 			if err != nil {
 				slog.Error("anthropic chat failed", "error", err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -210,7 +221,9 @@ var serveCmd = &cobra.Command{
 
 			if req.Stream {
 				w.Header().Set("Content-Type", "text/event-stream")
-				fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", fmt.Sprintf(`{"type":"message_start","message":{"id":"mclone","type":"message","role":"assistant","model":%q,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}`, req.Model))
+				// Send message_start
+				fmt.Fprintf(w, "event: message_start\ndata: %s\n\n", fmt.Sprintf(`{"type":"message_start","message":{"id":"mclone","type":"message","role":"assistant","model":%q,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}`, model))
+
 				fmt.Fprintf(w, "event: content_block_start\ndata: %s\n\n", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
 
 				for resp := range respChan {
@@ -231,7 +244,7 @@ var serveCmd = &cobra.Command{
 					content.WriteString(resp.Content)
 				}
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprintf(w, `{"id":"mclone","type":"message","role":"assistant","model":%q,"content":[{"type":"text","text":%q}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}`, req.Model, content.String())
+				fmt.Fprintf(w, `{"id":"mclone","type":"message","role":"assistant","model":%q,"content":[{"type":"text","text":%q}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}`, model, content.String())
 			}
 		}
 
@@ -280,5 +293,6 @@ var serveCmd = &cobra.Command{
 
 func init() {
 	serveCmd.Flags().Int("port", 8080, "Port to listen on")
+	serveCmd.Flags().String("model", "", "Force a specific model name (useful for Claude Code)")
 	rootCmd.AddCommand(serveCmd)
 }
