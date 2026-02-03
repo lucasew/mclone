@@ -1,46 +1,20 @@
 package gemini
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 
 	"github.com/lucasew/mclone/pkg/remote"
+	"github.com/tmc/langchaingo/llms"
+	"github.com/tmc/langchaingo/llms/googleai"
 )
 
 type GeminiProvider struct {
 	APIKey string
 }
 
-type geminiChatRequest struct {
-	Contents []geminiContent `json:"contents"`
-}
-
-type geminiContent struct {
-	Role  string       `json:"role"`
-	Parts []geminiPart `json:"parts"`
-}
-
-type geminiPart struct {
-	Text string `json:"text"`
-}
-
-type geminiResponse struct {
-	Candidates []struct {
-		Content struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
-		} `json:"content"`
-	} `json:"candidates"`
-}
-
-func (p *GeminiProvider) Name() string {
-	return "gemini"
-}
+func (p *GeminiProvider) Name() string { return "gemini" }
 
 func (p *GeminiProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return []remote.Model{}, nil
@@ -54,54 +28,23 @@ func (p *GeminiProvider) Put(ctx context.Context, name string, size int64, data 
 	return fmt.Errorf("not supported")
 }
 
-func (p *GeminiProvider) Chat(ctx context.Context, req remote.ChatRequest) (<-chan remote.ChatResponse, error) {
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?key=%s", req.Model, p.APIKey)
-
-	geminiReq := geminiChatRequest{}
-	for _, m := range req.Messages {
-		role := m.Role
-		if role == "assistant" {
-			role = "model"
-		}
-		geminiReq.Contents = append(geminiReq.Contents, geminiContent{
-			Role:  role,
-			Parts: []geminiPart{{Text: m.Content}},
-		})
-	}
-
-	body, _ := json.Marshal(geminiReq)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(httpReq)
+func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent) (<-chan remote.ChatResponse, error) {
+	llm, err := googleai.New(ctx, googleai.WithAPIKey(p.APIKey), googleai.WithDefaultModel(modelName))
 	if err != nil {
 		return nil, err
 	}
 
 	out := make(chan remote.ChatResponse)
 	go func() {
-		defer resp.Body.Close()
 		defer close(out)
-
-		dec := json.NewDecoder(resp.Body)
-		// Gemini stream is a JSON array of objects
-		if _, err := dec.Token(); err != nil {
-			return
-		}
-
-		for dec.More() {
-			var r geminiResponse
-			if err := dec.Decode(&r); err != nil {
-				out <- remote.ChatResponse{Error: err}
-				return
-			}
-			if len(r.Candidates) > 0 && len(r.Candidates[0].Content.Parts) > 0 {
-				out <- remote.ChatResponse{
-					Content: r.Candidates[0].Content.Parts[0].Text,
-				}
-			}
+		_, err := llm.GenerateContent(ctx, messages, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
+			out <- remote.ChatResponse{Content: string(chunk)}
+			return nil
+		}))
+		if err != nil {
+			out <- remote.ChatResponse{Error: err}
+		} else {
+			out <- remote.ChatResponse{Done: true}
 		}
 	}()
 

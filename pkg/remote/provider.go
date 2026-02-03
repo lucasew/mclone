@@ -3,22 +3,14 @@ package remote
 import (
 	"context"
 	"io"
+
+	"github.com/tmc/langchaingo/llms"
 )
 
 type Model struct {
 	Name string
 	Size int64
 	ID   string
-}
-
-type ChatMessage struct {
-	Role    string
-	Content string
-}
-
-type ChatRequest struct {
-	Model    string
-	Messages []ChatMessage
 }
 
 type ChatResponse struct {
@@ -32,5 +24,5 @@ type Provider interface {
 	List(ctx context.Context) ([]Model, error)
 	Get(ctx context.Context, name string) (io.ReadCloser, int64, error)
 	Put(ctx context.Context, name string, size int64, data io.Reader) error
-	Chat(ctx context.Context, req ChatRequest) (<-chan ChatResponse, error)
+	Chat(ctx context.Context, modelName string, messages []llms.MessageContent) (<-chan ChatResponse, error)
 }
