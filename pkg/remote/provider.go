@@ -14,9 +14,10 @@ type Model struct {
 }
 
 type ChatResponse struct {
-	Content string
-	Done    bool
-	Error   error
+	Content   string
+	ToolCalls []llms.ToolCall
+	Done      bool
+	Error     error
 }
 
 type Provider interface {
@@ -24,5 +25,5 @@ type Provider interface {
 	List(ctx context.Context) ([]Model, error)
 	Get(ctx context.Context, name string) (io.ReadCloser, int64, error)
 	Put(ctx context.Context, name string, size int64, data io.Reader) error
-	Chat(ctx context.Context, modelName string, messages []llms.MessageContent) (<-chan ChatResponse, error)
+	Chat(ctx context.Context, modelName string, messages []llms.MessageContent, options ...llms.CallOption) (<-chan ChatResponse, error)
 }

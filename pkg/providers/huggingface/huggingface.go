@@ -83,7 +83,7 @@ func (p *HFProvider) Put(ctx context.Context, name string, size int64, data io.R
 	return fmt.Errorf("read-only provider")
 }
 
-func (p *HFProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent) (<-chan remote.ChatResponse, error) {
+func (p *HFProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent, options ...llms.CallOption) (<-chan remote.ChatResponse, error) {
 	return nil, fmt.Errorf("huggingface provider does not support direct inference (use local or ollama)")
 }
 

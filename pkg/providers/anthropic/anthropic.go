@@ -29,7 +29,7 @@ func (p *AnthropicProvider) Put(ctx context.Context, name string, size int64, da
 	return fmt.Errorf("not supported")
 }
 
-func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent) (<-chan remote.ChatResponse, error) {
+func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent, options ...llms.CallOption) (<-chan remote.ChatResponse, error) {
 	llm, err := anthropic.New(anthropic.WithToken(p.APIKey), anthropic.WithModel(modelName))
 	if err != nil {
 		return nil, err
@@ -38,13 +38,22 @@ func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages
 	out := make(chan remote.ChatResponse)
 	go func() {
 		defer close(out)
-		_, err := llm.GenerateContent(ctx, messages, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
+
+		finalOptions := append(options, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
 			out <- remote.ChatResponse{Content: string(chunk)}
 			return nil
 		}))
+
+		resp, err := llm.GenerateContent(ctx, messages, finalOptions...)
 		if err != nil {
 			out <- remote.ChatResponse{Error: err}
 		} else {
+			if len(resp.Choices) > 0 {
+				aiMsg := resp.Choices[0]
+				if len(aiMsg.ToolCalls) > 0 {
+					out <- remote.ChatResponse{ToolCalls: aiMsg.ToolCalls}
+				}
+			}
 			out <- remote.ChatResponse{Done: true}
 		}
 	}()

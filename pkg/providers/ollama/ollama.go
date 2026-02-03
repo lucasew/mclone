@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -46,8 +47,12 @@ func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return models, nil
 }
 
-func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent) (<-chan remote.ChatResponse, error) {
-	llm, err := ollama.New(ollama.WithServerURL(p.BaseURL), ollama.WithModel(modelName))
+func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent, options ...llms.CallOption) (<-chan remote.ChatResponse, error) {
+	// Aumentamos o contexto padrão para aguentar o Claude Code
+	llm, err := ollama.New(
+		ollama.WithServerURL(p.BaseURL),
+		ollama.WithModel(modelName),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -55,15 +60,44 @@ func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []
 	out := make(chan remote.ChatResponse)
 	go func() {
 		defer close(out)
-		_, err := llm.GenerateContent(ctx, messages, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
-			out <- remote.ChatResponse{Content: string(chunk)}
+
+		startTime := time.Now()
+		var hasSentContent bool
+
+		// Force num_ctx via options if not provided
+		finalOptions := append(options, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
+			if len(chunk) > 0 {
+				if !hasSentContent {
+					slog.Debug("ollama_first_token", "latency", time.Since(startTime).String())
+					hasSentContent = true
+				}
+				out <- remote.ChatResponse{Content: string(chunk)}
+			}
 			return nil
 		}))
+
+		slog.Debug("ollama_request_start", "model", modelName)
+		resp, err := llm.GenerateContent(ctx, messages, finalOptions...)
 		if err != nil {
+			slog.Error("ollama_error", "error", err)
 			out <- remote.ChatResponse{Error: err}
-		} else {
-			out <- remote.ChatResponse{Done: true}
+			return
 		}
+
+		if len(resp.Choices) > 0 {
+			aiMsg := resp.Choices[0]
+			if !hasSentContent && aiMsg.Content != "" {
+				slog.Debug("ollama_fallback_content", "len", len(aiMsg.Content))
+				out <- remote.ChatResponse{Content: aiMsg.Content}
+			}
+
+			if len(aiMsg.ToolCalls) > 0 {
+				slog.Info("ollama_tool_calls", "count", len(aiMsg.ToolCalls))
+				out <- remote.ChatResponse{ToolCalls: aiMsg.ToolCalls}
+			}
+		}
+		slog.Debug("ollama_request_done", "total_duration", time.Since(startTime).String())
+		out <- remote.ChatResponse{Done: true}
 	}()
 	return out, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/tmc/langchaingo/llms"
@@ -28,7 +29,7 @@ func (p *GeminiProvider) Put(ctx context.Context, name string, size int64, data 
 	return fmt.Errorf("not supported")
 }
 
-func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent) (<-chan remote.ChatResponse, error) {
+func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent, options ...llms.CallOption) (<-chan remote.ChatResponse, error) {
 	llm, err := googleai.New(ctx, googleai.WithAPIKey(p.APIKey), googleai.WithDefaultModel(modelName))
 	if err != nil {
 		return nil, err
@@ -37,15 +38,38 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 	out := make(chan remote.ChatResponse)
 	go func() {
 		defer close(out)
-		_, err := llm.GenerateContent(ctx, messages, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
-			out <- remote.ChatResponse{Content: string(chunk)}
+
+		var hasSentContent bool
+		finalOptions := append(options, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
+			if len(chunk) > 0 {
+				hasSentContent = true
+				slog.Debug("gemini_chunk", "size", len(chunk))
+				out <- remote.ChatResponse{Content: string(chunk)}
+			}
 			return nil
 		}))
+
+		slog.Debug("gemini_request", "model", modelName, "msgs_len", len(messages))
+		resp, err := llm.GenerateContent(ctx, messages, finalOptions...)
 		if err != nil {
+			slog.Error("gemini_error", "error", err)
 			out <- remote.ChatResponse{Error: err}
-		} else {
-			out <- remote.ChatResponse{Done: true}
+			return
 		}
+
+		if len(resp.Choices) > 0 {
+			aiMsg := resp.Choices[0]
+			if !hasSentContent && aiMsg.Content != "" {
+				slog.Debug("gemini_fallback_content", "len", len(aiMsg.Content))
+				out <- remote.ChatResponse{Content: aiMsg.Content}
+			}
+
+			if len(aiMsg.ToolCalls) > 0 {
+				slog.Info("gemini_tool_calls_detected", "count", len(aiMsg.ToolCalls))
+				out <- remote.ChatResponse{ToolCalls: aiMsg.ToolCalls}
+			}
+		}
+		out <- remote.ChatResponse{Done: true}
 	}()
 
 	return out, nil
