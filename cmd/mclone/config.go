@@ -1,20 +1,156 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"sort"
+	"strings"
 
 	"github.com/lucasew/mclone/pkg/config"
+	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/spf13/cobra"
 )
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "Manage remotes",
+	Short: "Manage remotes (interactive by default)",
+	Run: func(cmd *cobra.Command, args []string) {
+		interactiveConfig()
+	},
+}
+
+func interactiveConfig() {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		conf, err := config.LoadConfig()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+
+		fmt.Println("\nCurrent remotes:")
+		names := make([]string, 0, len(conf.Remotes))
+		for name := range conf.Remotes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			r := conf.Remotes[name]
+			fmt.Printf("- %s (%s)\n", name, r.Type)
+		}
+
+		fmt.Println("\ne) Edit existing remote")
+		fmt.Println("n) New remote")
+		fmt.Println("d) Delete remote")
+		fmt.Println("q) Quit config")
+		fmt.Print("Select: ")
+
+		choice, _ := reader.ReadString('\n')
+		choice = strings.TrimSpace(choice)
+
+		switch choice {
+		case "n":
+			fmt.Print("Enter name for new remote: ")
+			name, _ := reader.ReadString('\n')
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+
+			types := remote.ListTypes()
+			sort.Strings(types)
+			fmt.Println("Available provider types:")
+			for i, t := range types {
+				fmt.Printf("%d) %s\n", i+1, t)
+			}
+			fmt.Print("Select type (number or name): ")
+			typeChoice, _ := reader.ReadString('\n')
+			typeChoice = strings.TrimSpace(typeChoice)
+
+			var selectedType string
+			for _, t := range types {
+				if typeChoice == t {
+					selectedType = t
+					break
+				}
+			}
+			if selectedType == "" {
+				var idx int
+				fmt.Sscanf(typeChoice, "%d", &idx)
+				if idx > 0 && idx <= len(types) {
+					selectedType = types[idx-1]
+				}
+			}
+
+			if selectedType == "" {
+				fmt.Println("Invalid type")
+				continue
+			}
+
+			options := make(map[string]string)
+			switch selectedType {
+			case "local":
+				fmt.Print("Enter path: ")
+				path, _ := reader.ReadString('\n')
+				options["path"] = strings.TrimSpace(path)
+			case "ollama":
+				fmt.Print("Enter base URL (default http://localhost:11434): ")
+				url, _ := reader.ReadString('\n')
+				url = strings.TrimSpace(url)
+				if url == "" {
+					url = "http://localhost:11434"
+				}
+				options["base_url"] = url
+			case "openai":
+				fmt.Print("Enter base URL (default https://api.openai.com/v1): ")
+				url, _ := reader.ReadString('\n')
+				url = strings.TrimSpace(url)
+				options["base_url"] = url
+				fmt.Print("Enter API Key: ")
+				key, _ := reader.ReadString('\n')
+				options["api_key"] = strings.TrimSpace(key)
+			case "anthropic":
+				fmt.Print("Enter API Key: ")
+				key, _ := reader.ReadString('\n')
+				options["api_key"] = strings.TrimSpace(key)
+			case "gemini":
+				fmt.Print("Enter API Key: ")
+				key, _ := reader.ReadString('\n')
+				options["api_key"] = strings.TrimSpace(key)
+			case "huggingface":
+				fmt.Print("Enter namespace (user or org): ")
+				ns, _ := reader.ReadString('\n')
+				options["namespace"] = strings.TrimSpace(ns)
+			}
+
+			conf.Remotes[name] = config.RemoteConfig{
+				Type:    selectedType,
+				Options: options,
+			}
+			conf.Save()
+			fmt.Printf("Remote %q added.\n", name)
+
+		case "d":
+			fmt.Print("Enter name of remote to delete: ")
+			name, _ := reader.ReadString('\n')
+			name = strings.TrimSpace(name)
+			if _, ok := conf.Remotes[name]; ok {
+				delete(conf.Remotes, name)
+				conf.Save()
+				fmt.Printf("Remote %q deleted.\n", name)
+			} else {
+				fmt.Println("Remote not found")
+			}
+		case "q":
+			return
+		}
+	}
 }
 
 var configAddCmd = &cobra.Command{
 	Use:   "add [name] [type]",
-	Short: "Add a new remote",
+	Short: "Add a new remote (non-interactive)",
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
