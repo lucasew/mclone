@@ -419,11 +419,39 @@ func toGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
 				"properties": map[string]interface{}{},
 			}
 		}
+		cleanSchema(params)
+		desc := t.Description
+		if desc == "" {
+			desc = t.Name
+		}
 		decls = append(decls, &genai.FunctionDeclaration{
-			Name: t.Name, Description: t.Description, ParametersJsonSchema: params,
+			Name: t.Name, Description: desc, ParametersJsonSchema: params,
 		})
 	}
 	return []*genai.Tool{{FunctionDeclarations: decls}}
+}
+
+// cleanSchema recursively removes JSON Schema fields that Gemini doesn't support.
+func cleanSchema(m map[string]interface{}) {
+	delete(m, "$schema")
+	delete(m, "additionalProperties")
+
+	// exclusiveMinimum/Maximum: Draft 2020-12 uses numbers, Gemini doesn't support them
+	delete(m, "exclusiveMinimum")
+	delete(m, "exclusiveMaximum")
+
+	// Recurse into properties
+	if props, ok := m["properties"].(map[string]interface{}); ok {
+		for _, v := range props {
+			if sub, ok := v.(map[string]interface{}); ok {
+				cleanSchema(sub)
+			}
+		}
+	}
+	// Recurse into items
+	if items, ok := m["items"].(map[string]interface{}); ok {
+		cleanSchema(items)
+	}
 }
 
 func init() {
