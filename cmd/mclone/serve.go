@@ -39,8 +39,13 @@ var serveCmd = &cobra.Command{
 		remoteName := strings.TrimSuffix(args[0], ":")
 		port, _ := cmd.Flags().GetInt("port")
 		overrideModel, _ := cmd.Flags().GetString("model")
+		verbose, _ := cmd.Flags().GetBool("verbose")
 
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		level := slog.LevelInfo
+		if verbose {
+			level = slog.LevelDebug
+		}
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
 		conf, err := config.LoadConfig()
 		if err != nil {
@@ -170,9 +175,9 @@ func serveModels(w http.ResponseWriter, r *http.Request, p remote.Provider) {
 	}
 
 	type modelEntry struct {
-		ID       string `json:"id"`
-		Object   string `json:"object"`
-		Created  int64  `json:"created"`
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		Created int64  `json:"created"`
 		OwnedBy string `json:"owned_by"`
 	}
 
@@ -194,5 +199,6 @@ func serveModels(w http.ResponseWriter, r *http.Request, p remote.Provider) {
 func init() {
 	serveCmd.Flags().Int("port", 8080, "Port to listen on")
 	serveCmd.Flags().String("model", "", "Force a specific model name (useful for Claude Code)")
+	serveCmd.Flags().BoolP("verbose", "v", false, "Enable debug logs")
 	rootCmd.AddCommand(serveCmd)
 }
