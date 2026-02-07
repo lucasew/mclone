@@ -5,11 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"regexp"
+	"strings"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
 	"google.golang.org/genai"
 )
+
+var thoughtRegex = regexp.MustCompile(`(?s)<thought>(.*?)</thought>`)
 
 type GeminiProvider struct {
 	APIKey string
@@ -63,7 +67,6 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				return
 			}
 
-			// We need to iterate over candidates to get Thought and ThoughtSignature
 			for _, cand := range resp.Candidates {
 				if cand.Content == nil {
 					continue
@@ -71,9 +74,8 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				for _, part := range cand.Content.Parts {
 					if part.Text != "" {
 						if part.Thought {
-							slog.Debug("gemini_thought", "content", part.Text)
-							// Prepend thought to content so it's preserved in history
-							out <- message.ChatResponse{Content: "<thought>\n" + part.Text + "\n</thought>\n"}
+							slog.Debug("gemini_thought_out", "len", len(part.Text))
+							out <- message.ChatResponse{Content: "<thought>" + part.Text + "</thought>"}
 						} else {
 							out <- message.ChatResponse{Content: part.Text}
 						}
@@ -84,9 +86,9 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 
 						id := part.FunctionCall.ID
 						if id == "" {
-							// If Gemini doesn't provide an ID, we use the name as ID
-							// to satisfy OpenAI/Anthropic requirements and our own mapping.
-							id = part.FunctionCall.Name
+							// Using a deterministic ID based on the function name if the model doesn't provide one.
+							// This helps in keeping the history stable.
+							id = "call_" + part.FunctionCall.Name
 						}
 
 						slog.Info("gemini_tool_call", "name", part.FunctionCall.Name, "id", id, "sig_len", len(sig))
@@ -120,7 +122,6 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 	var contents []*genai.Content
 	var system *genai.Content
 
-	// Build tool call ID → function name lookup
 	toolNames := make(map[string]string)
 	for _, m := range messages {
 		for _, p := range m.Parts {
@@ -130,85 +131,86 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 		}
 	}
 
-	for _, m := range messages {
-		switch m.Role {
-		case message.RoleSystem:
-			var parts []*genai.Part
-			for _, p := range m.Parts {
-				if tp, ok := p.(message.TextPart); ok && tp.Text != "" {
-					parts = append(parts, genai.NewPartFromText(tp.Text))
-				}
-			}
-			if len(parts) > 0 {
-				system = &genai.Content{Parts: parts, Role: "system"}
-			}
+	for i, m := range messages {
+		role := "user"
+		if m.Role == message.RoleAssistant {
+			role = "model"
+		}
 
-		case message.RoleUser:
-			c := &genai.Content{Role: "user"}
-			for _, p := range m.Parts {
-				switch v := p.(type) {
-				case message.TextPart:
-					if v.Text != "" {
-						c.Parts = append(c.Parts, genai.NewPartFromText(v.Text))
-					}
-				case message.ToolResultPart:
-					funcName := toolNames[v.ToolCallID]
-					if funcName == "" {
-						funcName = v.ToolCallID
-					}
-					c.Parts = append(c.Parts, genai.NewPartFromFunctionResponse(funcName, map[string]any{
-						"result": v.Content,
-					}))
-				}
-			}
-			if len(c.Parts) > 0 {
-				contents = append(contents, c)
-			}
+		c := &genai.Content{Role: role}
 
-		case message.RoleAssistant:
-			c := &genai.Content{Role: "model"}
-			for _, p := range m.Parts {
-				switch v := p.(type) {
-				case message.TextPart:
-					if v.Text != "" {
-						c.Parts = append(c.Parts, genai.NewPartFromText(v.Text))
+		for _, p := range m.Parts {
+			switch v := p.(type) {
+			case message.TextPart:
+				if v.Text == "" {
+					continue
+				}
+				// Clean up thought tags if they were mangled by the client
+				text := v.Text
+
+				lastIdx := 0
+				matches := thoughtRegex.FindAllStringSubmatchIndex(text, -1)
+				for _, match := range matches {
+					if match[0] > lastIdx {
+						preText := text[lastIdx:match[0]]
+						if strings.TrimSpace(preText) != "" {
+							c.Parts = append(c.Parts, genai.NewPartFromText(preText))
+						}
 					}
-				case message.ToolCallPart:
-					var args map[string]any
-					json.Unmarshal([]byte(v.Arguments), &args)
+					thoughtContent := text[match[2]:match[3]]
+					slog.Debug("gemini_thought_in", "msg_idx", i, "len", len(thoughtContent))
 					c.Parts = append(c.Parts, &genai.Part{
-						FunctionCall: &genai.FunctionCall{
-							ID:   v.ID,
-							Name: v.Name,
-							Args: args,
-						},
-						ThoughtSignature: func() []byte {
-							b, _ := base64.StdEncoding.DecodeString(v.ThoughtSignature)
-							return b
-						}(),
+						Text:    thoughtContent,
+						Thought: true,
 					})
+					lastIdx = match[1]
 				}
-			}
-			if len(c.Parts) > 0 {
-				contents = append(contents, c)
-			}
-
-		case message.RoleTool:
-			c := &genai.Content{Role: "user"}
-			for _, p := range m.Parts {
-				if v, ok := p.(message.ToolResultPart); ok {
-					funcName := toolNames[v.ToolCallID]
-					if funcName == "" {
-						funcName = v.ToolCallID
+				if lastIdx < len(text) {
+					postText := text[lastIdx:]
+					if strings.TrimSpace(postText) != "" {
+						c.Parts = append(c.Parts, genai.NewPartFromText(postText))
 					}
-					c.Parts = append(c.Parts, genai.NewPartFromFunctionResponse(funcName, map[string]any{
-						"result": v.Content,
-					}))
 				}
+
+			case message.ToolCallPart:
+				var args map[string]any
+				json.Unmarshal([]byte(v.Arguments), &args)
+				slog.Debug("gemini_tool_call_in", "msg_idx", i, "name", v.Name, "id", v.ID, "has_sig", v.ThoughtSignature != "")
+				c.Parts = append(c.Parts, &genai.Part{
+					FunctionCall: &genai.FunctionCall{
+						ID:   v.ID,
+						Name: v.Name,
+						Args: args,
+					},
+					ThoughtSignature: func() []byte {
+						b, _ := base64.StdEncoding.DecodeString(v.ThoughtSignature)
+						return b
+					}(),
+				})
+
+			case message.ToolResultPart:
+				funcName := toolNames[v.ToolCallID]
+				if funcName == "" {
+					funcName = v.ToolCallID
+				}
+				slog.Debug("gemini_tool_result_in", "msg_idx", i, "id", v.ToolCallID, "name", funcName)
+				c.Parts = append(c.Parts, &genai.Part{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:   v.ToolCallID,
+						Name: funcName,
+						Response: map[string]any{
+							"result": v.Content,
+						},
+					},
+				})
 			}
-			if len(c.Parts) > 0 {
-				contents = append(contents, c)
-			}
+		}
+
+		if m.Role == message.RoleSystem {
+			system = c
+			system.Role = "system"
+		} else if len(c.Parts) > 0 {
+			contents = append(contents, c)
 		}
 	}
 
