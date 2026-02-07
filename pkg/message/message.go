@@ -37,9 +37,10 @@ func (TextPart) isPart() {}
 
 // ToolCallPart represents a tool/function call made by the assistant.
 type ToolCallPart struct {
-	ID        string
-	Name      string
-	Arguments string // raw JSON
+	ID               string
+	Name             string
+	Arguments        string // raw JSON
+	ThoughtSignature string
 }
 
 func (ToolCallPart) isPart() {}
@@ -67,9 +68,10 @@ type ChatOptions struct {
 
 // ToolCall represents a tool call in a response.
 type ToolCall struct {
-	ID        string
-	Name      string
-	Arguments string // raw JSON
+	ID               string
+	Name             string
+	Arguments        string // raw JSON
+	ThoughtSignature string
 }
 
 // ParseArguments unmarshals the arguments JSON into the target.

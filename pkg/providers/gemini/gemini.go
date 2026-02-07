@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 
@@ -66,15 +67,23 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				out <- message.ChatResponse{Content: text}
 			}
 
-			for _, fc := range resp.FunctionCalls() {
-				args, _ := json.Marshal(fc.Args)
-				slog.Info("gemini_tool_call", "name", fc.Name, "id", fc.ID)
-				out <- message.ChatResponse{
-					ToolCalls: []message.ToolCall{{
-						ID:        fc.ID,
-						Name:      fc.Name,
-						Arguments: string(args),
-					}},
+			for _, cand := range resp.Candidates {
+				if cand.Content == nil {
+					continue
+				}
+				for _, part := range cand.Content.Parts {
+					if part.FunctionCall != nil {
+						args, _ := json.Marshal(part.FunctionCall.Args)
+						slog.Info("gemini_tool_call", "name", part.FunctionCall.Name, "id", part.FunctionCall.ID)
+						out <- message.ChatResponse{
+							ToolCalls: []message.ToolCall{{
+								ID:               part.FunctionCall.ID,
+								Name:             part.FunctionCall.Name,
+								Arguments:        string(args),
+								ThoughtSignature: base64.StdEncoding.EncodeToString(part.ThoughtSignature),
+							}},
+						}
+					}
 				}
 			}
 		}
@@ -158,6 +167,10 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 							Name: v.Name,
 							Args: args,
 						},
+						ThoughtSignature: func() []byte {
+							b, _ := base64.StdEncoding.DecodeString(v.ThoughtSignature)
+							return b
+						}(),
 					})
 				}
 			}

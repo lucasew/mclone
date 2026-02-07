@@ -9,10 +9,10 @@ import (
 )
 
 type IncomingMessage struct {
-	Role       string      `json:"role"`
-	Content    any         `json:"content"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Role       string     `json:"role"`
+	Content    any        `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type ToolCall struct {
@@ -66,11 +66,20 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 						b, _ := json.Marshal(input)
 						args = string(b)
 					}
+					var signature string
+					if parts := strings.SplitN(id, "||", 2); len(parts) == 2 {
+						id = parts[0]
+						signature = parts[1]
+					}
 					parts = append(parts, message.ToolCallPart{
 						ID: id, Name: name, Arguments: args,
+						ThoughtSignature: signature,
 					})
 				case "tool_result":
 					id, _ := pm["tool_use_id"].(string)
+					if parts := strings.SplitN(id, "||", 2); len(parts) == 2 {
+						id = parts[0]
+					}
 					contentStr := extractContent(pm["content"])
 					parts = append(parts, message.ToolResultPart{
 						ToolCallID: id, Content: contentStr,

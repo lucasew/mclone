@@ -70,6 +70,9 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 			if id == "" {
 				id = fmt.Sprintf("toolu_%d", time.Now().UnixNano())
 			}
+			if tc.ThoughtSignature != "" {
+				id = id + "||" + tc.ThoughtSignature
+			}
 
 			input := parseToolInput(tc.Arguments)
 
@@ -137,6 +140,9 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.ChatRespons
 		id := tc.ID
 		if id == "" {
 			id = fmt.Sprintf("toolu_%d", time.Now().UnixNano())
+		}
+		if tc.ThoughtSignature != "" {
+			id = id + "||" + tc.ThoughtSignature
 		}
 		resp.Content = append(resp.Content, ContentBlock{
 			Type: "tool_use", ID: id, Name: tc.Name,
