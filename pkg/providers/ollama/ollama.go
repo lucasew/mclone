@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
-	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/ollama"
 )
 
@@ -47,8 +47,7 @@ func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return models, nil
 }
 
-func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent, options ...llms.CallOption) (<-chan remote.ChatResponse, error) {
-	// Aumentamos o contexto padrão para aguentar o Claude Code
+func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
 	llm, err := ollama.New(
 		ollama.WithServerURL(p.BaseURL),
 		ollama.WithModel(modelName),
@@ -57,30 +56,30 @@ func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []
 		return nil, err
 	}
 
-	out := make(chan remote.ChatResponse)
+	out := make(chan message.ChatResponse)
 	go func() {
 		defer close(out)
 
 		startTime := time.Now()
 		var hasSentContent bool
 
-		// Force num_ctx via options if not provided
-		finalOptions := append(options, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
+		lcMsgs := message.ToLangChainMessages(messages)
+		lcOpts := message.ToLangChainOptions(options, func(ctx context.Context, chunk []byte) error {
 			if len(chunk) > 0 {
 				if !hasSentContent {
 					slog.Debug("ollama_first_token", "latency", time.Since(startTime).String())
 					hasSentContent = true
 				}
-				out <- remote.ChatResponse{Content: string(chunk)}
+				out <- message.ChatResponse{Content: string(chunk)}
 			}
 			return nil
-		}))
+		})
 
 		slog.Debug("ollama_request_start", "model", modelName)
-		resp, err := llm.GenerateContent(ctx, messages, finalOptions...)
+		resp, err := llm.GenerateContent(ctx, lcMsgs, lcOpts...)
 		if err != nil {
 			slog.Error("ollama_error", "error", err)
-			out <- remote.ChatResponse{Error: err}
+			out <- message.ChatResponse{Error: err}
 			return
 		}
 
@@ -88,16 +87,15 @@ func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []
 			aiMsg := resp.Choices[0]
 			if !hasSentContent && aiMsg.Content != "" {
 				slog.Debug("ollama_fallback_content", "len", len(aiMsg.Content))
-				out <- remote.ChatResponse{Content: aiMsg.Content}
+				out <- message.ChatResponse{Content: aiMsg.Content}
 			}
-
 			if len(aiMsg.ToolCalls) > 0 {
 				slog.Info("ollama_tool_calls", "count", len(aiMsg.ToolCalls))
-				out <- remote.ChatResponse{ToolCalls: aiMsg.ToolCalls}
+				out <- message.ChatResponse{ToolCalls: message.ToolCallsFromLangChain(aiMsg.ToolCalls)}
 			}
 		}
 		slog.Debug("ollama_request_done", "total_duration", time.Since(startTime).String())
-		out <- remote.ChatResponse{Done: true}
+		out <- message.ChatResponse{Done: true}
 	}()
 	return out, nil
 }

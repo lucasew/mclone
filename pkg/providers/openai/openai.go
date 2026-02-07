@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
-	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/openai"
 )
 
@@ -29,32 +29,30 @@ func (p *OpenAIProvider) Put(ctx context.Context, name string, size int64, data 
 	return fmt.Errorf("not supported")
 }
 
-func (p *OpenAIProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent, options ...llms.CallOption) (<-chan remote.ChatResponse, error) {
+func (p *OpenAIProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
 	llm, err := openai.New(openai.WithBaseURL(p.BaseURL), openai.WithToken(p.APIKey), openai.WithModel(modelName))
 	if err != nil {
 		return nil, err
 	}
 
-	out := make(chan remote.ChatResponse)
+	out := make(chan message.ChatResponse)
 	go func() {
 		defer close(out)
 
-		finalOptions := append(options, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
-			out <- remote.ChatResponse{Content: string(chunk)}
+		lcMsgs := message.ToLangChainMessages(messages)
+		lcOpts := message.ToLangChainOptions(options, func(ctx context.Context, chunk []byte) error {
+			out <- message.ChatResponse{Content: string(chunk)}
 			return nil
-		}))
+		})
 
-		resp, err := llm.GenerateContent(ctx, messages, finalOptions...)
+		resp, err := llm.GenerateContent(ctx, lcMsgs, lcOpts...)
 		if err != nil {
-			out <- remote.ChatResponse{Error: err}
+			out <- message.ChatResponse{Error: err}
 		} else {
-			if len(resp.Choices) > 0 {
-				aiMsg := resp.Choices[0]
-				if len(aiMsg.ToolCalls) > 0 {
-					out <- remote.ChatResponse{ToolCalls: aiMsg.ToolCalls}
-				}
+			if len(resp.Choices) > 0 && len(resp.Choices[0].ToolCalls) > 0 {
+				out <- message.ChatResponse{ToolCalls: message.ToolCallsFromLangChain(resp.Choices[0].ToolCalls)}
 			}
-			out <- remote.ChatResponse{Done: true}
+			out <- message.ChatResponse{Done: true}
 		}
 	}()
 	return out, nil

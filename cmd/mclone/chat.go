@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/config"
+	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/spf13/cobra"
-	"github.com/tmc/langchaingo/llms"
 )
 
 var chatCmd = &cobra.Command{
@@ -45,7 +45,7 @@ var chatCmd = &cobra.Command{
 		}
 
 		ctx := context.Background()
-		var messages []llms.MessageContent
+		var messages []message.Message
 
 		scanner := bufio.NewScanner(os.Stdin)
 		fmt.Printf("Chatting with %s on %s. Type 'exit' to quit.\n", modelName, remoteName)
@@ -60,9 +60,9 @@ var chatCmd = &cobra.Command{
 				break
 			}
 
-			messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, input))
+			messages = append(messages, message.TextParts(message.RoleUser, input))
 
-			respChan, err := p.Chat(ctx, modelName, messages)
+			respChan, err := p.Chat(ctx, modelName, messages, message.ChatOptions{})
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 				continue
@@ -79,7 +79,7 @@ var chatCmd = &cobra.Command{
 			}
 			fmt.Println()
 
-			messages = append(messages, llms.TextParts(llms.ChatMessageTypeAI, fullResponse.String()))
+			messages = append(messages, message.TextParts(message.RoleAssistant, fullResponse.String()))
 		}
 	},
 }

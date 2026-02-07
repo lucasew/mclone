@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
-	"github.com/tmc/langchaingo/llms"
 )
 
 type LocalProvider struct {
@@ -70,7 +70,7 @@ func (p *LocalProvider) Put(ctx context.Context, name string, size int64, data i
 	return err
 }
 
-func (p *LocalProvider) Chat(ctx context.Context, modelName string, messages []llms.MessageContent, options ...llms.CallOption) (<-chan remote.ChatResponse, error) {
+func (p *LocalProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
 	return nil, fmt.Errorf("local provider does not support inference yet (requires local runner)")
 }
 
