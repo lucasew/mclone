@@ -91,8 +91,11 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 		}
 	}
 
-	// Merge consecutive text parts
-	finalParts := mergeTextParts(parts)
+	// Merge consecutive text parts only for user messages
+	finalParts := parts
+	if m.Role == "user" {
+		finalParts = mergeTextParts(parts)
+	}
 
 	// Append OpenAI-style tool_calls from assistant messages
 	if m.Role == "assistant" && len(m.ToolCalls) > 0 {

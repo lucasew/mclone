@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
@@ -60,6 +62,11 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 		defer close(out)
 
 		slog.Debug("gemini_generate_start", "model", modelName, "msgs_len", len(messages))
+
+		// Map to accumulate tool calls by their index/ID in the candidate parts
+		toolCallsMap := make(map[string]*message.ToolCall)
+		var toolCallOrder []string
+
 		for resp, err := range client.Models.GenerateContentStream(ctx, modelName, contents, config) {
 			if err != nil {
 				slog.Error("gemini_stream_error", "error", err)
@@ -71,7 +78,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				if cand.Content == nil {
 					continue
 				}
-				for _, part := range cand.Content.Parts {
+				for i, part := range cand.Content.Parts {
 					if part.Text != "" {
 						if part.Thought {
 							slog.Debug("gemini_thought_out", "len", len(part.Text))
@@ -81,29 +88,49 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 						}
 					}
 					if part.FunctionCall != nil {
+						// Create a stable key for this part index in this candidate
+						key := fmt.Sprintf("part_%d", i)
+
 						args, _ := json.Marshal(part.FunctionCall.Args)
 						sig := base64.StdEncoding.EncodeToString(part.ThoughtSignature)
 
 						id := part.FunctionCall.ID
 						if id == "" {
-							// Using a deterministic ID based on the function name if the model doesn't provide one.
-							// This helps in keeping the history stable.
-							id = "call_" + part.FunctionCall.Name
+							// If model doesn't provide ID, we check if we already assigned one for this part
+							if existing, ok := toolCallsMap[key]; ok {
+								id = existing.ID
+							} else {
+								id = fmt.Sprintf("%s-%d", part.FunctionCall.Name, time.Now().UnixNano())
+							}
 						}
 
-						slog.Info("gemini_tool_call", "name", part.FunctionCall.Name, "id", id, "sig_len", len(sig))
-						out <- message.ChatResponse{
-							ToolCalls: []message.ToolCall{{
-								ID:               id,
-								Name:             part.FunctionCall.Name,
-								Arguments:        string(args),
-								ThoughtSignature: sig,
-							}},
+						if _, ok := toolCallsMap[key]; !ok {
+							toolCallOrder = append(toolCallOrder, key)
 						}
+
+						toolCallsMap[key] = &message.ToolCall{
+							ID:               id,
+							Name:             part.FunctionCall.Name,
+							Arguments:        string(args),
+							ThoughtSignature: sig,
+						}
+						slog.Debug("gemini_tool_call_buffered", "key", key, "name", part.FunctionCall.Name, "id", id)
 					}
 				}
 			}
 		}
+
+		if len(toolCallOrder) > 0 {
+			var finalCalls []message.ToolCall
+			for _, key := range toolCallOrder {
+				finalCalls = append(finalCalls, *toolCallsMap[key])
+			}
+			slog.Info("gemini_sending_buffered_tool_calls", "count", len(finalCalls))
+			out <- message.ChatResponse{
+				ToolCalls: finalCalls,
+			}
+		}
+
 		slog.Debug("gemini_generate_done")
 		out <- message.ChatResponse{Done: true}
 	}()
@@ -145,9 +172,7 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 				if v.Text == "" {
 					continue
 				}
-				// Clean up thought tags if they were mangled by the client
 				text := v.Text
-
 				lastIdx := 0
 				matches := thoughtRegex.FindAllStringSubmatchIndex(text, -1)
 				for _, match := range matches {
