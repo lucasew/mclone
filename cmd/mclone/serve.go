@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strings"
 
@@ -73,6 +74,12 @@ var serveCmd = &cobra.Command{
 		mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 			serveModels(w, r, p)
 		})
+
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			slog.Info("request", "method", r.Method, "path", r.URL.Path)
