@@ -425,6 +425,10 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 func toGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
 	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
 	for _, t := range tools {
+		if t.Type != "" && t.Type != "function" {
+			slog.Debug("gemini_skip_tool", "name", t.Name, "type", t.Type)
+			continue
+		}
 		var params map[string]interface{}
 		if err := json.Unmarshal(t.Parameters, &params); err != nil || params == nil {
 			slog.Debug("gemini_tool_schema_fallback", "name", t.Name, "raw_len", len(t.Parameters))

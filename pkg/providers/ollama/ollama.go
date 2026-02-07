@@ -194,19 +194,23 @@ func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamU
 }
 
 func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
-	out := make([]sdk.ChatCompletionToolParam, len(tools))
-	for i, t := range tools {
+	var out []sdk.ChatCompletionToolParam
+	for _, t := range tools {
+		if t.Type != "" && t.Type != "function" {
+			slog.Debug("ollama_skip_tool", "name", t.Name, "type", t.Type)
+			continue
+		}
 		var params shared.FunctionParameters
 		json.Unmarshal(t.Parameters, &params)
 
-		out[i] = sdk.ChatCompletionToolParam{
+		out = append(out, sdk.ChatCompletionToolParam{
 			Type: "function",
 			Function: shared.FunctionDefinitionParam{
 				Name:        t.Name,
 				Description: sdk.String(t.Description),
 				Parameters:  params,
 			},
-		}
+		})
 	}
 	return out
 }

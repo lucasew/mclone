@@ -134,14 +134,19 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 	msgs := parseMessages(req)
 
 	opts := message.ChatOptions{}
+	hasSearchTool := false
 	if len(req.Tools) > 0 {
-		opts.Tools = make([]message.ToolDefinition, len(req.Tools))
-		for i, t := range req.Tools {
-			opts.Tools[i] = t.ToDefinition()
-			if i == 0 {
-				schemaJSON, _ := json.Marshal(t)
-				slog.Debug("tool_sample", "name", t.Name, "schema", string(schemaJSON))
+		for _, t := range req.Tools {
+			def := t.ToDefinition()
+			if normalized, ok := normalizeSearchTool(def); ok {
+				if !hasSearchTool {
+					opts.Tools = append(opts.Tools, normalized)
+					hasSearchTool = true
+					slog.Debug("tool_normalized", "from", def.Name, "type", def.Type)
+				}
+				continue
 			}
+			opts.Tools = append(opts.Tools, def)
 		}
 		slog.Info("tools_configured", "count", len(opts.Tools))
 	}
@@ -270,6 +275,26 @@ func mergeStop(stopField any, stopSequences []string) []string {
 		result = stopSequences
 	}
 	return result
+}
+
+var webSearchSchema = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Search query"}},"required":["query"]}`)
+
+// normalizeSearchTool converts special search tools (WebSearch, web_search_20250305, etc.)
+// into a standard function tool that the search wrapper can intercept.
+func normalizeSearchTool(def message.ToolDefinition) (message.ToolDefinition, bool) {
+	switch {
+	case def.Name == "WebSearch",
+		def.Name == "WebFetch",
+		def.Name == "web_search" && def.Type != "function",
+		def.Type != "" && def.Type != "function":
+		return message.ToolDefinition{
+			Type:        "function",
+			Name:        "web_search",
+			Description: "Search the web for current information. Returns relevant results with titles, URLs, and snippets.",
+			Parameters:  webSearchSchema,
+		}, true
+	}
+	return def, false
 }
 
 func init() {

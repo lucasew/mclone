@@ -28,13 +28,22 @@ func (p *SearchWrapperProvider) List(ctx context.Context) ([]remote.Model, error
 }
 
 func (p *SearchWrapperProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	// Inject web_search function tool
-	options.Tools = append(options.Tools, message.ToolDefinition{
-		Type:        "function",
-		Name:        "web_search",
-		Description: "Search the web for current information. Use this when you need up-to-date data or facts you're not sure about.",
-		Parameters:  searchToolSchema,
-	})
+	// Inject web_search function tool if not already present
+	hasSearch := false
+	for _, t := range options.Tools {
+		if t.Name == "web_search" {
+			hasSearch = true
+			break
+		}
+	}
+	if !hasSearch {
+		options.Tools = append(options.Tools, message.ToolDefinition{
+			Type:        "function",
+			Name:        "web_search",
+			Description: "Search the web for current information. Use this when you need up-to-date data or facts you're not sure about.",
+			Parameters:  searchToolSchema,
+		})
+	}
 
 	out := make(chan message.ChatResponse)
 	go func() {
