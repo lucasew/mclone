@@ -148,7 +148,11 @@ func validateToolCall(tc message.ToolCall, schema json.RawMessage) error {
 		return err
 	}
 	if !result.Valid() {
-		slog.Warn("tool_validation_failed", "name", tc.Name, "id", tc.ID)
+		var errs []string
+		for _, e := range result.Errors() {
+			errs = append(errs, e.String())
+		}
+		slog.Warn("tool_validation_failed", "name", tc.Name, "id", tc.ID, "errors", strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -202,11 +206,8 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 				}
 			case message.ToolCallPart:
 				if unsignedCalls[v.ID] {
-					// No thought signature available — degrade to text
-					slog.Debug("gemini_degrade_unsigned_call", "id", v.ID, "name", v.Name)
-					parts = append(parts, genai.NewPartFromText(
-						fmt.Sprintf("[Called tool %s(%s)]", v.Name, string(v.Arguments)),
-					))
+					// No thought signature available — drop from history
+					slog.Debug("gemini_skip_unsigned_call", "id", v.ID, "name", v.Name)
 					continue
 				}
 				sdkArgs := make(map[string]interface{})
@@ -229,10 +230,8 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					continue
 				}
 				if unsignedCalls[v.ToolCallID] {
-					// Corresponding call was degraded — degrade result too
-					parts = append(parts, genai.NewPartFromText(
-						fmt.Sprintf("[Tool %s returned: %s]", name, v.Content),
-					))
+					// Corresponding call was dropped — drop result too
+					slog.Debug("gemini_skip_unsigned_result", "tool_call_id", v.ToolCallID, "name", name)
 					continue
 				}
 				content := v.Content
