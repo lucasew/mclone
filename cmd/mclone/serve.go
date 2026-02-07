@@ -65,10 +65,10 @@ var serveCmd = &cobra.Command{
 
 		mux := http.NewServeMux()
 		mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
-			serveChatRequest(w, r, p, overrideModel, anthropicWriter)
+			serveChatRequest(w, r, p, overrideModel, anthropicWriter, cmd)
 		})
 		mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-			serveChatRequest(w, r, p, overrideModel, openaiWriter)
+			serveChatRequest(w, r, p, overrideModel, openaiWriter, cmd)
 		})
 		mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 			serveModels(w, r, p)
@@ -86,8 +86,17 @@ var serveCmd = &cobra.Command{
 	},
 }
 
-func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider, overrideModel string, writer protocol.Writer) {
+func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider, overrideModel string, writer protocol.Writer, cmd *cobra.Command) {
 	body, _ := io.ReadAll(r.Body)
+
+	if path, _ := cmd.Flags().GetString("save-raw-request"); path != "" {
+		err := os.WriteFile(path, body, 0644)
+		if err != nil {
+			slog.Error("failed to save raw request", "path", path, "error", err)
+		} else {
+			slog.Debug("saved raw request", "path", path)
+		}
+	}
 
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -200,5 +209,6 @@ func init() {
 	serveCmd.Flags().Int("port", 8080, "Port to listen on")
 	serveCmd.Flags().String("model", "", "Force a specific model name (useful for Claude Code)")
 	serveCmd.Flags().BoolP("verbose", "v", false, "Enable debug logs")
+	serveCmd.Flags().String("save-raw-request", "", "Path to save the raw incoming request body (overwrites)")
 	rootCmd.AddCommand(serveCmd)
 }

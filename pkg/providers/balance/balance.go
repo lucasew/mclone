@@ -17,11 +17,11 @@ import (
 const defaultFailoverThreshold = 60 * time.Second
 
 type backend struct {
-	provider         remote.Provider
-	name             string
-	availableAt      time.Time
+	provider          remote.Provider
+	name              string
+	availableAt       time.Time
 	failoverThreshold time.Duration
-	mu               sync.Mutex
+	mu                sync.Mutex
 }
 
 func (b *backend) getAvailableAt() time.Time {
@@ -66,6 +66,7 @@ func (p *BalanceProvider) List(ctx context.Context) ([]remote.Model, error) {
 
 func (p *BalanceProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
 	affinityKey := systemHash(messages)
+	slog.Info("balance_system_prompt_hash", "hash", affinityKey)
 	b := p.pickBackend(affinityKey)
 	if b == nil {
 		return nil, fmt.Errorf("all backends unavailable")

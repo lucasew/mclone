@@ -233,7 +233,7 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 		}
 	}
 
-	// NORMALIZATION PASS 1: Merge consecutive turns of the same role
+	// Step 1: Force role alternation and merge consecutive turns of the same role
 	var merged []*genai.Content
 	for _, t := range rawTurns {
 		if len(merged) > 0 && merged[len(merged)-1].Role == t.Role {
@@ -243,15 +243,17 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 		}
 	}
 
-	// NORMALIZATION PASS 2: Structural Integrity
-	// - Moves Call parts to the end of model turns.
-	// - Ensures User turns with Responses follow Model turns with Calls immediately.
-	var normalized []*genai.Content
+	// Step 2: Structural integrity pass (strictly enforced)
+	// Rules:
+	// - Model turn: [Thoughts/Text] then [Calls]. Nothing after Calls.
+	// - After a turn with Calls, the NEXT turn MUST be User and MUST start with Responses.
+
+	var final []*genai.Content
 	for i := 0; i < len(merged); i++ {
 		turn := merged[i]
 
 		if turn.Role == "model" {
-			// Rearrange model parts: [Thoughts/Text] then [Calls]
+			// Organize Model turn: [Non-Calls] then [Calls]
 			var nonCalls []*genai.Part
 			var calls []*genai.Part
 			for _, p := range turn.Parts {
@@ -262,8 +264,11 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 				}
 			}
 			turn.Parts = append(nonCalls, calls...)
+			final = append(final, turn)
+			continue
 		}
 
+		// If it's a User turn, check if it contains responses.
 		hasResponse := false
 		for _, p := range turn.Parts {
 			if p.FunctionResponse != nil {
@@ -272,80 +277,65 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 			}
 		}
 
-		if hasResponse && len(normalized) > 0 {
-			// Find the model turn that HAD the call
-			var lastModelWithCallIdx = -1
-			for j := len(normalized) - 1; j >= 0; j-- {
-				if normalized[j].Role == "model" {
-					hasCall := false
-					for _, p := range normalized[j].Parts {
-						if p.FunctionCall != nil {
-							hasCall = true
-							break
-						}
-					}
-					if hasCall {
-						lastModelWithCallIdx = j
-						break
-					}
+		if hasResponse {
+			// Find the model turn that HAD the calls (it should be the last model turn in final)
+			var lastModelIdx = -1
+			for j := len(final) - 1; j >= 0; j-- {
+				if final[j].Role == "model" {
+					lastModelIdx = j
+					break
 				}
 			}
 
-			if lastModelWithCallIdx != -1 {
-				// Rule violation: if there are turns between lastModelWithCall and current Response turn,
-				// they MUST be moved into the model turn (before the calls).
+			if lastModelIdx != -1 {
+				// Rule: Any turns between the last Model turn and this User response turn
+				// must be flattened into their respective preceding turns.
 
-				// Identify parts to move
-				var partsToMove []*genai.Part
-				for j := lastModelWithCallIdx + 1; j < len(normalized); j++ {
-					partsToMove = append(partsToMove, normalized[j].Parts...)
+				// 1. Move everything between lastModel and current turn to either Model or User turn.
+				for j := lastModelIdx + 1; j < len(final); j++ {
+					interTurn := final[j]
+					if interTurn.Role == "model" {
+						// This shouldn't happen due to Step 1 merge, but safety first.
+						final[lastModelIdx].Parts = append(final[lastModelIdx].Parts, interTurn.Parts...)
+					} else {
+						// Move intermediate user text to follow the responses in the current turn.
+						turn.Parts = append(turn.Parts, interTurn.Parts...)
+					}
 				}
+				final = final[:lastModelIdx+1]
 
-				// Re-organize model turn: [Original Text] + [Moved Text] + [Calls]
-				originalModel := normalized[lastModelWithCallIdx]
-				var mText []*genai.Part
+				// 2. Re-organize the last Model turn to put Calls at the absolute end.
+				var mOther []*genai.Part
 				var mCalls []*genai.Part
-				for _, p := range originalModel.Parts {
+				for _, p := range final[lastModelIdx].Parts {
 					if p.FunctionCall != nil {
 						mCalls = append(mCalls, p)
 					} else {
-						mText = append(mText, p)
+						mOther = append(mOther, p)
 					}
 				}
+				final[lastModelIdx].Parts = append(mOther, mCalls...)
 
-				originalModel.Parts = append(mText, partsToMove...)
-				originalModel.Parts = append(originalModel.Parts, mCalls...)
-
-				// Truncate history to the corrected model turn
-				normalized = normalized[:lastModelWithCallIdx+1]
-
-				// Now, the response turn MUST be only responses.
-				var responsesOnly []*genai.Part
-				var userText []*genai.Part
+				// 3. Re-organize the current User turn to put Responses at the absolute start.
+				var uResponses []*genai.Part
+				var uOther []*genai.Part
 				for _, p := range turn.Parts {
 					if p.FunctionResponse != nil {
-						responsesOnly = append(responsesOnly, p)
+						uResponses = append(uResponses, p)
 					} else {
-						userText = append(userText, p)
+						uOther = append(uOther, p)
 					}
 				}
-
-				// Append Response turn
-				normalized = append(normalized, &genai.Content{Role: "user", Parts: responsesOnly})
-
-				// Append User text turn if any (this maintains alternation because the next turn will be Model)
-				if len(userText) > 0 {
-					normalized = append(normalized, &genai.Content{Role: "user", Parts: userText})
-				}
-				continue
+				turn.Parts = append(uResponses, uOther...)
 			}
 		}
-		normalized = append(normalized, turn)
+
+		final = append(final, turn)
 	}
 
-	// FINAL PASS: Role Alternation
+	// Final Step: Role Alternation Pass (guarantees alternation even after repairs)
 	var result []*genai.Content
-	for _, t := range normalized {
+	for _, t := range final {
 		if len(result) > 0 && result[len(result)-1].Role == t.Role {
 			result[len(result)-1].Parts = append(result[len(result)-1].Parts, t.Parts...)
 		} else {
@@ -353,7 +343,7 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 		}
 	}
 
-	// Debug sequence
+	// Logging for sequence validation
 	for i, t := range result {
 		var pt []string
 		for _, p := range t.Parts {
@@ -371,7 +361,7 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 				}
 			}
 		}
-		slog.Debug("gemini_final_sequence", "idx", i, "role", t.Role, "parts", strings.Join(pt, ","))
+		slog.Debug("gemini_normalized_sequence", "idx", i, "role", t.Role, "parts", strings.Join(pt, ","))
 	}
 
 	return result, system
