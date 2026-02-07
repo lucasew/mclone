@@ -88,7 +88,6 @@ var serveCmd = &cobra.Command{
 
 func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider, overrideModel string, writer protocol.Writer) {
 	body, _ := io.ReadAll(r.Body)
-	slog.Debug("raw_request", "body", string(body))
 
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -111,7 +110,9 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 		opts.Tools = make([]message.ToolDefinition, len(req.Tools))
 		for i, t := range req.Tools {
 			opts.Tools[i] = t.ToDefinition()
+			slog.Debug("tool_received", "name", t.Name, "has_input_schema", t.InputSchema != nil, "has_parameters", t.Parameters != nil)
 		}
+		slog.Info("tools_configured", "count", len(opts.Tools))
 	}
 	if req.OutputConfig != nil && req.OutputConfig.Format.Type == "json_schema" {
 		opts.JSONMode = true

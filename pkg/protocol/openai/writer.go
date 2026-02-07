@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -24,6 +25,10 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 	protocol.SetStreamHeaders(rw)
 
 	for resp := range ch {
+		if resp.Error != nil {
+			slog.Error("openai_stream_error", "error", resp.Error)
+			continue
+		}
 		chunk := ChatCompletionChunk{
 			ID:     "mclone",
 			Object: "chat.completion.chunk",
@@ -48,6 +53,10 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.ChatRespons
 	var content strings.Builder
 	var toolCalls []message.ToolCall
 	for resp := range ch {
+		if resp.Error != nil {
+			slog.Error("openai_json_error", "error", resp.Error)
+			continue
+		}
 		content.WriteString(resp.Content)
 		toolCalls = append(toolCalls, resp.ToolCalls...)
 	}

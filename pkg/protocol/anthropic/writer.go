@@ -46,6 +46,10 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 	})
 
 	for resp := range ch {
+		if resp.Error != nil {
+			slog.Error("anthropic_stream_error", "error", resp.Error)
+			continue
+		}
 		if resp.Content != "" {
 			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
 				Type:  "content_block_delta",
@@ -111,6 +115,10 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.ChatRespons
 	var content strings.Builder
 	var toolCalls []message.ToolCall
 	for resp := range ch {
+		if resp.Error != nil {
+			slog.Error("anthropic_json_error", "error", resp.Error)
+			continue
+		}
 		content.WriteString(resp.Content)
 		toolCalls = append(toolCalls, resp.ToolCalls...)
 	}
