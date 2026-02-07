@@ -80,7 +80,9 @@ var serveCmd = &cobra.Command{
 		})
 
 		slog.Info("starting server", "remote", remoteName, "port", port)
-		http.ListenAndServe(fmt.Sprintf(":%d", port), handler)
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", port), handler); err != nil {
+			slog.Error("server failed", "error", err)
+		}
 	},
 }
 
