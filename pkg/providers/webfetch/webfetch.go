@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,7 +46,7 @@ func (p *WebFetchWrapperProvider) Chat(ctx context.Context, modelName string, me
 	// Inject WebFetch function tool if not already present
 	hasFetch := false
 	for _, t := range options.Tools {
-		if t.Name == "WebFetch" {
+		if strings.EqualFold(t.Name, "WebFetch") {
 			hasFetch = true
 			break
 		}
@@ -97,7 +98,7 @@ func (p *WebFetchWrapperProvider) Chat(ctx context.Context, modelName string, me
 					out <- resp
 				}
 				for _, tc := range resp.ToolCalls {
-					if tc.Name == "WebFetch" {
+					if strings.EqualFold(tc.Name, "WebFetch") {
 						fetchCalls = append(fetchCalls, tc)
 					} else {
 						otherCalls = append(otherCalls, tc)

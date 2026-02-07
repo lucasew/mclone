@@ -28,22 +28,23 @@ func (p *SearchWrapperProvider) List(ctx context.Context) ([]remote.Model, error
 }
 
 func (p *SearchWrapperProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	// Inject WebSearch function tool if not already present
-	hasSearch := false
+	// Remove existing web_search/WebSearch tool if present to avoid duplicates
+	// and ensure we control the definition.
+	var cleanTools []message.ToolDefinition
 	for _, t := range options.Tools {
-		if t.Name == "WebSearch" {
-			hasSearch = true
-			break
+		if !strings.EqualFold(t.Name, "WebSearch") {
+			cleanTools = append(cleanTools, t)
 		}
 	}
-	if !hasSearch {
-		options.Tools = append(options.Tools, message.ToolDefinition{
-			Type:        "function",
-			Name:        "WebSearch",
-			Description: "Search the web for current information. Use this when you need up-to-date data or facts you're not sure about.",
-			Parameters:  searchToolSchema,
-		})
-	}
+	options.Tools = cleanTools
+
+	// Inject WebSearch function tool
+	options.Tools = append(options.Tools, message.ToolDefinition{
+		Type:        "function",
+		Name:        "WebSearch",
+		Description: "Search the web for current information. Use this when you need up-to-date data or facts you're not sure about.",
+		Parameters:  searchToolSchema,
+	})
 
 	out := make(chan message.ChatResponse)
 	go func() {
@@ -76,7 +77,7 @@ func (p *SearchWrapperProvider) Chat(ctx context.Context, modelName string, mess
 					out <- resp
 				}
 				for _, tc := range resp.ToolCalls {
-					if tc.Name == "WebSearch" {
+					if strings.EqualFold(tc.Name, "WebSearch") {
 						searchCalls = append(searchCalls, tc)
 					} else {
 						otherCalls = append(otherCalls, tc)
