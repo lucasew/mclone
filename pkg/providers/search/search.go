@@ -28,10 +28,10 @@ func (p *SearchWrapperProvider) List(ctx context.Context) ([]remote.Model, error
 }
 
 func (p *SearchWrapperProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	// Inject web_search function tool if not already present
+	// Inject WebSearch function tool if not already present
 	hasSearch := false
 	for _, t := range options.Tools {
-		if t.Name == "web_search" {
+		if t.Name == "WebSearch" {
 			hasSearch = true
 			break
 		}
@@ -39,7 +39,7 @@ func (p *SearchWrapperProvider) Chat(ctx context.Context, modelName string, mess
 	if !hasSearch {
 		options.Tools = append(options.Tools, message.ToolDefinition{
 			Type:        "function",
-			Name:        "web_search",
+			Name:        "WebSearch",
 			Description: "Search the web for current information. Use this when you need up-to-date data or facts you're not sure about.",
 			Parameters:  searchToolSchema,
 		})
@@ -76,7 +76,7 @@ func (p *SearchWrapperProvider) Chat(ctx context.Context, modelName string, mess
 					out <- resp
 				}
 				for _, tc := range resp.ToolCalls {
-					if tc.Name == "web_search" {
+					if tc.Name == "WebSearch" {
 						searchCalls = append(searchCalls, tc)
 					} else {
 						otherCalls = append(otherCalls, tc)

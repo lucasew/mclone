@@ -87,6 +87,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages
 	// Tools
 	if len(options.Tools) > 0 {
 		params.Tools = toSDKTools(options.Tools)
+		slog.Info("anthropic_tools_sent", "count", len(params.Tools), "names", listToolNames(params.Tools))
 	}
 
 	stream := client.Messages.NewStreaming(ctx, params)
@@ -250,6 +251,19 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ToolUnionParam {
 		}
 	}
 	return out
+}
+
+func listToolNames(tools []sdk.ToolUnionParam) []string {
+	var names []string
+	for _, t := range tools {
+		if t.OfTool != nil {
+			names = append(names, t.OfTool.Name)
+		}
+		if t.OfWebSearchTool20250305 != nil {
+			names = append(names, "web_search_20250305")
+		}
+	}
+	return names
 }
 
 func init() {

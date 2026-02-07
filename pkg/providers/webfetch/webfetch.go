@@ -29,21 +29,7 @@ const (
 	dialerKeepAlive   = 30 * time.Second
 )
 
-var webFetchToolSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"url": {
-			"type": "string",
-			"description": "The URL of the article or web page to fetch"
-		},
-		"format": {
-			"type": "string",
-			"enum": ["md", "markdown", "html", "text", "json"],
-			"description": "The output format (default: md)"
-		}
-	},
-	"required": ["url"]
-}`)
+var webFetchToolSchema = json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","description":"The URL of the article or web page to fetch"},"format":{"type":"string","enum":["md","markdown","html","text","json"],"description":"The output format (default: md)"}},"required":["url"]}`)
 
 type WebFetchWrapperProvider struct {
 	base remote.Provider
@@ -56,10 +42,10 @@ func (p *WebFetchWrapperProvider) List(ctx context.Context) ([]remote.Model, err
 }
 
 func (p *WebFetchWrapperProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	// Inject web_fetch function tool if not already present
+	// Inject WebFetch function tool if not already present
 	hasFetch := false
 	for _, t := range options.Tools {
-		if t.Name == "web_fetch" {
+		if t.Name == "WebFetch" {
 			hasFetch = true
 			break
 		}
@@ -67,7 +53,7 @@ func (p *WebFetchWrapperProvider) Chat(ctx context.Context, modelName string, me
 	if !hasFetch {
 		options.Tools = append(options.Tools, message.ToolDefinition{
 			Type:        "function",
-			Name:        "web_fetch",
+			Name:        "WebFetch",
 			Description: "Fetch and parse the content of a web page/article. Use this to read external links provided by the user or found via search.",
 			Parameters:  webFetchToolSchema,
 		})
@@ -111,7 +97,7 @@ func (p *WebFetchWrapperProvider) Chat(ctx context.Context, modelName string, me
 					out <- resp
 				}
 				for _, tc := range resp.ToolCalls {
-					if tc.Name == "web_fetch" {
+					if tc.Name == "WebFetch" {
 						fetchCalls = append(fetchCalls, tc)
 					} else {
 						otherCalls = append(otherCalls, tc)
