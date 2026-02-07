@@ -11,7 +11,6 @@ import (
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
-	"github.com/xeipuuv/gojsonschema"
 	"google.golang.org/genai"
 )
 
@@ -128,7 +127,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				if def, ok := toolDefinitionCache.Load(tc.Name); ok {
 					tDef := def.(message.ToolDefinition)
 					if len(tDef.Parameters) > 0 {
-						validateToolCall(tc, tDef.Parameters)
+						tc.Arguments = cleanToolCallArgs(tc, tDef.Parameters)
 					}
 				}
 				finalCalls = append(finalCalls, tc)
@@ -140,21 +139,36 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 	return out, nil
 }
 
-func validateToolCall(tc message.ToolCall, schema json.RawMessage) error {
-	schemaLoader := gojsonschema.NewBytesLoader(schema)
-	documentLoader := gojsonschema.NewBytesLoader(tc.Arguments)
-	result, err := gojsonschema.Validate(schemaLoader, documentLoader)
-	if err != nil {
-		return err
+func cleanToolCallArgs(tc message.ToolCall, schema json.RawMessage) json.RawMessage {
+	var schemaDef struct {
+		Properties map[string]json.RawMessage `json:"properties"`
 	}
-	if !result.Valid() {
-		var errs []string
-		for _, e := range result.Errors() {
-			errs = append(errs, e.String())
+	if err := json.Unmarshal(schema, &schemaDef); err != nil || schemaDef.Properties == nil {
+		return tc.Arguments
+	}
+
+	var args map[string]interface{}
+	if err := json.Unmarshal(tc.Arguments, &args); err != nil {
+		return tc.Arguments
+	}
+
+	var removed []string
+	for k := range args {
+		if _, ok := schemaDef.Properties[k]; !ok {
+			removed = append(removed, k)
+			delete(args, k)
 		}
-		slog.Warn("tool_validation_failed", "name", tc.Name, "id", tc.ID, "errors", strings.Join(errs, "; "))
 	}
-	return nil
+
+	if len(removed) > 0 {
+		slog.Warn("tool_args_cleaned", "name", tc.Name, "id", tc.ID, "removed", strings.Join(removed, ", "))
+	}
+
+	cleaned, err := json.Marshal(args)
+	if err != nil {
+		return tc.Arguments
+	}
+	return json.RawMessage(cleaned)
 }
 
 func (p *GeminiProvider) client() (*genai.Client, error) {
@@ -395,13 +409,19 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 }
 
 func toGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
-	decls := make([]*genai.FunctionDeclaration, len(tools))
-	for i, t := range tools {
+	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
+	for _, t := range tools {
 		var params map[string]interface{}
-		json.Unmarshal(t.Parameters, &params)
-		decls[i] = &genai.FunctionDeclaration{
-			Name: t.Name, Description: t.Description, ParametersJsonSchema: params,
+		if err := json.Unmarshal(t.Parameters, &params); err != nil || params == nil {
+			slog.Debug("gemini_tool_schema_fallback", "name", t.Name, "raw_len", len(t.Parameters))
+			params = map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			}
 		}
+		decls = append(decls, &genai.FunctionDeclaration{
+			Name: t.Name, Description: t.Description, ParametersJsonSchema: params,
+		})
 	}
 	return []*genai.Tool{{FunctionDeclarations: decls}}
 }
