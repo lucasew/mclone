@@ -10,8 +10,11 @@ import (
 
 type Factory func(name string, options map[string]string, resolve Resolver) (Provider, error)
 
-// Resolver creates a provider from a remote name using the config.
-type Resolver func(remoteName string) (Provider, error)
+// Resolver provides access to both provider and searcher resolution.
+type Resolver struct {
+	Provider func(remoteName string) (Provider, error)
+	Searcher func(remoteName string) (Searcher, error)
+}
 
 var registry = make(map[string]Factory)
 
@@ -31,10 +34,13 @@ func ListTypes() []string {
 // It supports implicit balance groups via the ":" naming convention:
 // remotes named "anth:1", "anth:2" form an implicit balance group "anth".
 func NewResolver(conf *config.Config) Resolver {
-	cache := make(map[string]Provider)
+	providerCache := make(map[string]Provider)
+	searcherCache := make(map[string]Searcher)
+
 	var resolve Resolver
-	resolve = func(remoteName string) (Provider, error) {
-		if p, ok := cache[remoteName]; ok {
+
+	resolve.Provider = func(remoteName string) (Provider, error) {
+		if p, ok := providerCache[remoteName]; ok {
 			return p, nil
 		}
 
@@ -42,9 +48,31 @@ func NewResolver(conf *config.Config) Resolver {
 		if err != nil {
 			return nil, err
 		}
-		cache[remoteName] = p
+		providerCache[remoteName] = p
 		return p, nil
 	}
+
+	resolve.Searcher = func(remoteName string) (Searcher, error) {
+		if s, ok := searcherCache[remoteName]; ok {
+			return s, nil
+		}
+
+		rc, ok := conf.Remotes[remoteName]
+		if !ok {
+			return nil, fmt.Errorf("search remote %q not found", remoteName)
+		}
+		factory, ok := searchRegistry[rc.Type]
+		if !ok {
+			return nil, fmt.Errorf("unknown search type: %s", rc.Type)
+		}
+		s, err := factory(remoteName, rc.Options)
+		if err != nil {
+			return nil, err
+		}
+		searcherCache[remoteName] = s
+		return s, nil
+	}
+
 	return resolve
 }
 
@@ -78,11 +106,10 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 	}
 
 	if len(members) == 1 {
-		return resolve(members[0])
+		return resolve.Provider(members[0])
 	}
 
 	// Build implicit balance group
-	// Resolve group-level options (from the typeless "anth" entry if it exists)
 	groupOpts := map[string]string{}
 	if exactMatch {
 		groupOpts = rc.Options
@@ -93,14 +120,12 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 		return nil, fmt.Errorf("balance provider not registered")
 	}
 
-	// Pass member list, group options, and per-member overrides to balance factory
 	opts := make(map[string]string)
 	for k, v := range groupOpts {
 		opts[k] = v
 	}
 	opts["remotes"] = strings.Join(members, ",")
 
-	// Inject per-member failover_threshold as "failover_threshold:<name>"
 	for _, m := range members {
 		if mc, ok := conf.Remotes[m]; ok && mc.Options != nil {
 			if ft, ok := mc.Options["failover_threshold"]; ok {
@@ -117,5 +142,5 @@ func NewProvider(typeName string, name string, options map[string]string) (Provi
 	if !ok {
 		return nil, fmt.Errorf("unknown provider type: %s", typeName)
 	}
-	return factory(name, options, nil)
+	return factory(name, options, Resolver{})
 }

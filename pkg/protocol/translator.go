@@ -177,6 +177,7 @@ func mergeTextParts(parts []message.Part) []message.Part {
 }
 
 type Tool struct {
+	Type        string          `json:"type"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
@@ -188,7 +189,12 @@ func (t Tool) ToDefinition() message.ToolDefinition {
 	if len(params) == 0 {
 		params = t.InputSchema
 	}
+	typ := t.Type
+	if typ == "" || typ == "function" {
+		typ = "function"
+	}
 	return message.ToolDefinition{
+		Type:        typ,
 		Name:        t.Name,
 		Description: t.Description,
 		Parameters:  params,

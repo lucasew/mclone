@@ -209,7 +209,7 @@ func parseThreshold(s string, fallback time.Duration) time.Duration {
 
 func init() {
 	remote.Register("balance", func(name string, options map[string]string, resolve remote.Resolver) (remote.Provider, error) {
-		if resolve == nil {
+		if resolve.Provider == nil {
 			return nil, fmt.Errorf("balance provider requires a resolver")
 		}
 
@@ -224,7 +224,7 @@ func init() {
 		backends := make([]*backend, 0, len(names))
 		for _, rn := range names {
 			rn = strings.TrimSpace(rn)
-			prov, err := resolve(rn)
+			prov, err := resolve.Provider(rn)
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve remote %q: %w", rn, err)
 			}

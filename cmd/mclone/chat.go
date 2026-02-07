@@ -33,7 +33,7 @@ var chatCmd = &cobra.Command{
 		}
 
 		resolve := remote.NewResolver(conf)
-		p, err := resolve(remoteName)
+		p, err := resolve.Provider(remoteName)
 		if err != nil {
 			fmt.Printf("Error creating provider: %v\n", err)
 			return

@@ -62,6 +62,7 @@ func (ToolResultPart) isPart() {}
 
 // ToolDefinition describes a tool available for the model to call.
 type ToolDefinition struct {
+	Type        string          // "function" (default), "web_search_20250305", etc.
 	Name        string
 	Description string
 	Parameters  json.RawMessage // JSON Schema

@@ -110,6 +110,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages
 					tc := &message.ToolCall{ID: b.ID, Name: b.Name}
 					toolCalls[ev.Index] = tc
 					toolCallOrder = append(toolCallOrder, ev.Index)
+				case sdk.ServerToolUseBlock:
+					slog.Debug("anthropic_server_tool_use", "name", string(b.Name), "id", b.ID)
+				case sdk.WebSearchToolResultBlock:
+					slog.Debug("anthropic_web_search_result", "tool_use_id", b.ToolUseID)
 				}
 			case sdk.ContentBlockDeltaEvent:
 				delta := ev.Delta
@@ -207,33 +211,41 @@ func toSDKMessages(messages []message.Message) []sdk.MessageParam {
 }
 
 func toSDKTools(tools []message.ToolDefinition) []sdk.ToolUnionParam {
-	out := make([]sdk.ToolUnionParam, len(tools))
-	for i, t := range tools {
-		var props map[string]any
-		json.Unmarshal(t.Parameters, &props)
+	var out []sdk.ToolUnionParam
+	for _, t := range tools {
+		switch t.Type {
+		case "web_search_20250305":
+			out = append(out, sdk.ToolUnionParam{
+				OfWebSearchTool20250305: &sdk.WebSearchTool20250305Param{},
+			})
+		default:
+			// Regular function tool
+			var props map[string]any
+			json.Unmarshal(t.Parameters, &props)
 
-		schema := sdk.ToolInputSchemaParam{
-			Type: "object",
-		}
-		if p, ok := props["properties"]; ok {
-			schema.Properties = p
-		}
-		if r, ok := props["required"]; ok {
-			if req, ok := r.([]any); ok {
-				strs := make([]string, len(req))
-				for j, s := range req {
-					strs[j], _ = s.(string)
-				}
-				schema.Required = strs
+			schema := sdk.ToolInputSchemaParam{
+				Type: "object",
 			}
-		}
+			if p, ok := props["properties"]; ok {
+				schema.Properties = p
+			}
+			if r, ok := props["required"]; ok {
+				if req, ok := r.([]any); ok {
+					strs := make([]string, len(req))
+					for j, s := range req {
+						strs[j], _ = s.(string)
+					}
+					schema.Required = strs
+				}
+			}
 
-		out[i] = sdk.ToolUnionParam{
-			OfTool: &sdk.ToolParam{
-				Name:        t.Name,
-				Description: sdk.String(t.Description),
-				InputSchema: schema,
-			},
+			out = append(out, sdk.ToolUnionParam{
+				OfTool: &sdk.ToolParam{
+					Name:        t.Name,
+					Description: sdk.String(t.Description),
+					InputSchema: schema,
+				},
+			})
 		}
 	}
 	return out

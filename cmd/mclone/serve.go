@@ -61,7 +61,7 @@ var serveCmd = &cobra.Command{
 		}
 
 		resolve := remote.NewResolver(conf)
-		p, err := resolve(remoteName)
+		p, err := resolve.Provider(remoteName)
 		if err != nil {
 			slog.Error("failed to create provider", "error", err)
 			return

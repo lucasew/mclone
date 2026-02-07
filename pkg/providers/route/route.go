@@ -50,7 +50,7 @@ func (p *RouteProvider) Chat(ctx context.Context, modelName string, messages []m
 
 func init() {
 	remote.Register("route", func(name string, options map[string]string, resolve remote.Resolver) (remote.Provider, error) {
-		if resolve == nil {
+		if resolve.Provider == nil {
 			return nil, fmt.Errorf("route provider requires a resolver")
 		}
 
@@ -59,7 +59,7 @@ func init() {
 			parts := strings.SplitN(target, ":", 2)
 			remoteName := parts[0]
 
-			prov, err := resolve(remoteName)
+			prov, err := resolve.Provider(remoteName)
 			if err != nil {
 				return nil, fmt.Errorf("route %q: failed to resolve remote %q: %w", model, remoteName, err)
 			}

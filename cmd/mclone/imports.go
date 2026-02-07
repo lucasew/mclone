@@ -7,4 +7,7 @@ import (
 	_ "github.com/lucasew/mclone/pkg/providers/ollama"
 	_ "github.com/lucasew/mclone/pkg/providers/openai"
 	_ "github.com/lucasew/mclone/pkg/providers/route"
+	_ "github.com/lucasew/mclone/pkg/providers/search"
+
+	_ "github.com/lucasew/mclone/pkg/search/stub"
 )
