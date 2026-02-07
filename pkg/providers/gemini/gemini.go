@@ -96,37 +96,59 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 	var contents []*genai.Content
 	var system *genai.Content
 
+	// Build tool call ID → function name lookup
+	toolNames := make(map[string]string)
+	for _, m := range messages {
+		for _, p := range m.Parts {
+			if tc, ok := p.(message.ToolCallPart); ok {
+				toolNames[tc.ID] = tc.Name
+			}
+		}
+	}
+
 	for _, m := range messages {
 		switch m.Role {
 		case message.RoleSystem:
 			var parts []*genai.Part
 			for _, p := range m.Parts {
-				if tp, ok := p.(message.TextPart); ok {
+				if tp, ok := p.(message.TextPart); ok && tp.Text != "" {
 					parts = append(parts, genai.NewPartFromText(tp.Text))
 				}
 			}
-			system = &genai.Content{Parts: parts, Role: "user"}
+			if len(parts) > 0 {
+				system = &genai.Content{Parts: parts, Role: "user"}
+			}
 
 		case message.RoleUser:
 			c := &genai.Content{Role: "user"}
 			for _, p := range m.Parts {
 				switch v := p.(type) {
 				case message.TextPart:
-					c.Parts = append(c.Parts, genai.NewPartFromText(v.Text))
+					if v.Text != "" {
+						c.Parts = append(c.Parts, genai.NewPartFromText(v.Text))
+					}
 				case message.ToolResultPart:
-					c.Parts = append(c.Parts, genai.NewPartFromFunctionResponse(v.ToolCallID, map[string]any{
+					funcName := toolNames[v.ToolCallID]
+					if funcName == "" {
+						funcName = v.ToolCallID
+					}
+					c.Parts = append(c.Parts, genai.NewPartFromFunctionResponse(funcName, map[string]any{
 						"result": v.Content,
 					}))
 				}
 			}
-			contents = append(contents, c)
+			if len(c.Parts) > 0 {
+				contents = append(contents, c)
+			}
 
 		case message.RoleAssistant:
 			c := &genai.Content{Role: "model"}
 			for _, p := range m.Parts {
 				switch v := p.(type) {
 				case message.TextPart:
-					c.Parts = append(c.Parts, genai.NewPartFromText(v.Text))
+					if v.Text != "" {
+						c.Parts = append(c.Parts, genai.NewPartFromText(v.Text))
+					}
 				case message.ToolCallPart:
 					var args map[string]any
 					json.Unmarshal([]byte(v.Arguments), &args)
@@ -139,18 +161,26 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					})
 				}
 			}
-			contents = append(contents, c)
+			if len(c.Parts) > 0 {
+				contents = append(contents, c)
+			}
 
 		case message.RoleTool:
 			c := &genai.Content{Role: "user"}
 			for _, p := range m.Parts {
 				if v, ok := p.(message.ToolResultPart); ok {
-					c.Parts = append(c.Parts, genai.NewPartFromFunctionResponse(v.ToolCallID, map[string]any{
+					funcName := toolNames[v.ToolCallID]
+					if funcName == "" {
+						funcName = v.ToolCallID
+					}
+					c.Parts = append(c.Parts, genai.NewPartFromFunctionResponse(funcName, map[string]any{
 						"result": v.Content,
 					}))
 				}
 			}
-			contents = append(contents, c)
+			if len(c.Parts) > 0 {
+				contents = append(contents, c)
+			}
 		}
 	}
 
