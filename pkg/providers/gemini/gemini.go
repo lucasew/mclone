@@ -3,13 +3,11 @@ package gemini
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
-	"net/http"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
-	"github.com/tmc/langchaingo/llms/googleai"
+	"google.golang.org/genai"
 )
 
 type GeminiProvider struct {
@@ -19,130 +17,156 @@ type GeminiProvider struct {
 func (p *GeminiProvider) Name() string { return "gemini" }
 
 func (p *GeminiProvider) List(ctx context.Context) ([]remote.Model, error) {
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models?key=%s", p.APIKey)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	client, err := p.client()
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Models []struct {
-			Name        string `json:"name"`
-			DisplayName string `json:"displayName"`
-		} `json:"models"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	models := make([]remote.Model, 0, len(result.Models))
-	for _, m := range result.Models {
+	var models []remote.Model
+	for m, err := range client.Models.All(ctx) {
+		if err != nil {
+			return nil, err
+		}
 		models = append(models, remote.Model{Name: m.DisplayName, Slug: m.Name})
 	}
 	return models, nil
 }
 
-
 func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	llm, err := googleai.New(ctx, googleai.WithAPIKey(p.APIKey), googleai.WithDefaultModel(modelName))
+	client, err := p.client()
 	if err != nil {
 		return nil, err
 	}
 
-	options.Tools = sanitizeTools(options.Tools)
+	contents, systemInstruction := toGeminiContents(messages)
+	config := &genai.GenerateContentConfig{}
+	if systemInstruction != nil {
+		config.SystemInstruction = systemInstruction
+	}
+	if len(options.Tools) > 0 {
+		config.Tools = toGeminiTools(options.Tools)
+	}
+	if options.JSONMode {
+		config.ResponseMIMEType = "application/json"
+	}
 
 	out := make(chan message.ChatResponse)
 	go func() {
 		defer close(out)
 
-		var hasSentContent bool
-		lcMsgs := message.ToLangChainMessages(messages)
-		lcOpts := message.ToLangChainOptions(options, func(ctx context.Context, chunk []byte) error {
-			if len(chunk) > 0 {
-				hasSentContent = true
-				slog.Debug("gemini_chunk", "size", len(chunk))
-				out <- message.ChatResponse{Content: string(chunk)}
+		slog.Debug("gemini_generate_start", "model", modelName, "msgs_len", len(messages))
+		for resp, err := range client.Models.GenerateContentStream(ctx, modelName, contents, config) {
+			if err != nil {
+				slog.Error("gemini_stream_error", "error", err)
+				out <- message.ChatResponse{Error: err}
+				return
 			}
-			return nil
-		})
 
-		slog.Debug("gemini_request", "model", modelName, "msgs_len", len(messages))
-		resp, err := llm.GenerateContent(ctx, lcMsgs, lcOpts...)
-		if err != nil {
-			slog.Error("gemini_error", "error", fmt.Sprintf("%+v", err))
-			out <- message.ChatResponse{Error: err}
-			return
-		}
-
-		if len(resp.Choices) > 0 {
-			aiMsg := resp.Choices[0]
-			if !hasSentContent && aiMsg.Content != "" {
-				slog.Debug("gemini_fallback_content", "len", len(aiMsg.Content))
-				out <- message.ChatResponse{Content: aiMsg.Content}
+			if text := resp.Text(); text != "" {
+				out <- message.ChatResponse{Content: text}
 			}
-			if len(aiMsg.ToolCalls) > 0 {
-				slog.Info("gemini_tool_calls_detected", "count", len(aiMsg.ToolCalls))
-				out <- message.ChatResponse{ToolCalls: message.ToolCallsFromLangChain(aiMsg.ToolCalls)}
+
+			for _, fc := range resp.FunctionCalls() {
+				args, _ := json.Marshal(fc.Args)
+				slog.Info("gemini_tool_call", "name", fc.Name, "id", fc.ID)
+				out <- message.ChatResponse{
+					ToolCalls: []message.ToolCall{{
+						ID:        fc.ID,
+						Name:      fc.Name,
+						Arguments: string(args),
+					}},
+				}
 			}
 		}
+		slog.Debug("gemini_generate_done")
 		out <- message.ChatResponse{Done: true}
 	}()
 
 	return out, nil
 }
 
-func sanitizeTools(tools []message.ToolDefinition) []message.ToolDefinition {
-	out := make([]message.ToolDefinition, len(tools))
-	for i, t := range tools {
-		out[i] = message.ToolDefinition{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  sanitizeSchema(t.Parameters),
-		}
-	}
-	return out
+func (p *GeminiProvider) client() (*genai.Client, error) {
+	return genai.NewClient(context.Background(), &genai.ClientConfig{
+		APIKey:  p.APIKey,
+		Backend: genai.BackendGeminiAPI,
+	})
 }
 
-func sanitizeSchema(schema map[string]any) map[string]any {
-	if schema == nil {
-		return nil
-	}
-	clean := make(map[string]any, len(schema))
-	for k, v := range schema {
-		switch k {
-		case "$schema", "additionalProperties", "exclusiveMinimum", "exclusiveMaximum":
-			continue
-		case "properties":
-			if props, ok := v.(map[string]any); ok {
-				cleanProps := make(map[string]any, len(props))
-				for pk, pv := range props {
-					if pm, ok := pv.(map[string]any); ok {
-						cleanProps[pk] = sanitizeSchema(pm)
-					} else {
-						cleanProps[pk] = pv
-					}
+func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Content) {
+	var contents []*genai.Content
+	var system *genai.Content
+
+	for _, m := range messages {
+		switch m.Role {
+		case message.RoleSystem:
+			var parts []*genai.Part
+			for _, p := range m.Parts {
+				if tp, ok := p.(message.TextPart); ok {
+					parts = append(parts, genai.NewPartFromText(tp.Text))
 				}
-				clean[k] = cleanProps
-			} else {
-				clean[k] = v
 			}
-		case "items":
-			if items, ok := v.(map[string]any); ok {
-				clean[k] = sanitizeSchema(items)
-			} else {
-				clean[k] = v
+			system = &genai.Content{Parts: parts, Role: "user"}
+
+		case message.RoleUser:
+			c := &genai.Content{Role: "user"}
+			for _, p := range m.Parts {
+				switch v := p.(type) {
+				case message.TextPart:
+					c.Parts = append(c.Parts, genai.NewPartFromText(v.Text))
+				case message.ToolResultPart:
+					c.Parts = append(c.Parts, genai.NewPartFromFunctionResponse(v.ToolCallID, map[string]any{
+						"result": v.Content,
+					}))
+				}
 			}
-		default:
-			clean[k] = v
+			contents = append(contents, c)
+
+		case message.RoleAssistant:
+			c := &genai.Content{Role: "model"}
+			for _, p := range m.Parts {
+				switch v := p.(type) {
+				case message.TextPart:
+					c.Parts = append(c.Parts, genai.NewPartFromText(v.Text))
+				case message.ToolCallPart:
+					var args map[string]any
+					json.Unmarshal([]byte(v.Arguments), &args)
+					c.Parts = append(c.Parts, &genai.Part{
+						FunctionCall: &genai.FunctionCall{
+							ID:   v.ID,
+							Name: v.Name,
+							Args: args,
+						},
+					})
+				}
+			}
+			contents = append(contents, c)
+
+		case message.RoleTool:
+			c := &genai.Content{Role: "user"}
+			for _, p := range m.Parts {
+				if v, ok := p.(message.ToolResultPart); ok {
+					c.Parts = append(c.Parts, genai.NewPartFromFunctionResponse(v.ToolCallID, map[string]any{
+						"result": v.Content,
+					}))
+				}
+			}
+			contents = append(contents, c)
 		}
 	}
-	return clean
+
+	return contents, system
+}
+
+func toGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
+	decls := make([]*genai.FunctionDeclaration, len(tools))
+	for i, t := range tools {
+		decls[i] = &genai.FunctionDeclaration{
+			Name:                 t.Name,
+			Description:          t.Description,
+			ParametersJsonSchema: t.Parameters,
+		}
+	}
+	return []*genai.Tool{{FunctionDeclarations: decls}}
 }
 
 func init() {
