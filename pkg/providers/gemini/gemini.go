@@ -2,9 +2,10 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
+	"net/http"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
@@ -18,16 +19,35 @@ type GeminiProvider struct {
 func (p *GeminiProvider) Name() string { return "gemini" }
 
 func (p *GeminiProvider) List(ctx context.Context) ([]remote.Model, error) {
-	return []remote.Model{}, nil
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models?key=%s", p.APIKey)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Models []struct {
+			Name        string `json:"name"`
+			DisplayName string `json:"displayName"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	models := make([]remote.Model, 0, len(result.Models))
+	for _, m := range result.Models {
+		models = append(models, remote.Model{Name: m.DisplayName, Slug: m.Name})
+	}
+	return models, nil
 }
 
-func (p *GeminiProvider) Get(ctx context.Context, name string) (io.ReadCloser, int64, error) {
-	return nil, 0, fmt.Errorf("not supported")
-}
-
-func (p *GeminiProvider) Put(ctx context.Context, name string, size int64, data io.Reader) error {
-	return fmt.Errorf("not supported")
-}
 
 func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
 	llm, err := googleai.New(ctx, googleai.WithAPIKey(p.APIKey), googleai.WithDefaultModel(modelName))

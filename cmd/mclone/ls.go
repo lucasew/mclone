@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/lucasew/mclone/pkg/config"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/spf13/cobra"
@@ -15,10 +17,7 @@ var lsCmd = &cobra.Command{
 	Short: "List models in a remote",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		remoteName := args[0]
-		if strings.HasSuffix(remoteName, ":") {
-			remoteName = remoteName[:len(remoteName)-1]
-		}
+		remoteName := strings.TrimSuffix(args[0], ":")
 
 		conf, err := config.LoadConfig()
 		if err != nil {
@@ -44,24 +43,14 @@ var lsCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("%-30s %10s\n", "NAME", "SIZE")
+		t := table.NewWriter()
+		t.SetOutputMirror(os.Stdout)
+		t.AppendHeader(table.Row{"Slug", "Name"})
 		for _, m := range models {
-			fmt.Printf("%-30s %10s\n", m.Name, formatSize(m.Size))
+			t.AppendRow(table.Row{m.Slug, m.Name})
 		}
+		t.Render()
 	},
-}
-
-func formatSize(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 func init() {

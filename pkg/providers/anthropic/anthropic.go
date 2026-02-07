@@ -2,8 +2,8 @@ package anthropic
 
 import (
 	"context"
-	"fmt"
-	"io"
+	"encoding/json"
+	"net/http"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
@@ -18,16 +18,36 @@ type AnthropicProvider struct {
 func (p *AnthropicProvider) Name() string { return "anthropic" }
 
 func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
-	return []remote.Model{}, nil
+	url := "https://api.anthropic.com/v1/models"
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-api-key", p.APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	models := make([]remote.Model, 0, len(result.Data))
+	for _, m := range result.Data {
+		models = append(models, remote.Model{Name: m.ID, Slug: m.ID})
+	}
+	return models, nil
 }
 
-func (p *AnthropicProvider) Get(ctx context.Context, name string) (io.ReadCloser, int64, error) {
-	return nil, 0, fmt.Errorf("not supported")
-}
-
-func (p *AnthropicProvider) Put(ctx context.Context, name string, size int64, data io.Reader) error {
-	return fmt.Errorf("not supported")
-}
 
 func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
 	llm, err := anthropic.New(anthropic.WithToken(p.APIKey), anthropic.WithModel(modelName))

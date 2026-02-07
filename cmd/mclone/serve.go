@@ -188,7 +188,7 @@ func serveModels(w http.ResponseWriter, r *http.Request, p remote.Provider) {
 
 	for _, m := range models {
 		resp.Data = append(resp.Data, modelEntry{
-			ID: m.Name, Object: "model", Created: 1677610602, OwnedBy: "mclone",
+			ID: m.Slug, Object: "model", Created: 1677610602, OwnedBy: "mclone",
 		})
 	}
 

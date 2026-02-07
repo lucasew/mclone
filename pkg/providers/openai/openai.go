@@ -2,8 +2,9 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
+	"net/http"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
@@ -18,16 +19,36 @@ type OpenAIProvider struct {
 func (p *OpenAIProvider) Name() string { return "openai" }
 
 func (p *OpenAIProvider) List(ctx context.Context) ([]remote.Model, error) {
-	return []remote.Model{}, nil
+	url := fmt.Sprintf("%s/models", p.BaseURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.APIKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID      string `json:"id"`
+			OwnedBy string `json:"owned_by"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	models := make([]remote.Model, 0, len(result.Data))
+	for _, m := range result.Data {
+		models = append(models, remote.Model{Name: m.ID, Slug: m.ID})
+	}
+	return models, nil
 }
 
-func (p *OpenAIProvider) Get(ctx context.Context, name string) (io.ReadCloser, int64, error) {
-	return nil, 0, fmt.Errorf("not supported")
-}
-
-func (p *OpenAIProvider) Put(ctx context.Context, name string, size int64, data io.Reader) error {
-	return fmt.Errorf("not supported")
-}
 
 func (p *OpenAIProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
 	llm, err := openai.New(openai.WithBaseURL(p.BaseURL), openai.WithToken(p.APIKey), openai.WithModel(modelName))

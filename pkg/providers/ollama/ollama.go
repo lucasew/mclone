@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -42,7 +41,7 @@ func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 
 	var models []remote.Model
 	for _, m := range tags.Models {
-		models = append(models, remote.Model{Name: m.Name, Size: m.Size, ID: m.Name})
+		models = append(models, remote.Model{Name: m.Name, Slug: m.Name})
 	}
 	return models, nil
 }
@@ -100,13 +99,6 @@ func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []
 	return out, nil
 }
 
-func (p *OllamaProvider) Get(ctx context.Context, name string) (io.ReadCloser, int64, error) {
-	return nil, 0, fmt.Errorf("not implemented")
-}
-
-func (p *OllamaProvider) Put(ctx context.Context, name string, size int64, data io.Reader) error {
-	return fmt.Errorf("not implemented")
-}
 
 func init() {
 	remote.Register("ollama", func(name string, options map[string]string) (remote.Provider, error) {
