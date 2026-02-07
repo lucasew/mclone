@@ -46,8 +46,9 @@ type ContentBlockDeltaEvent struct {
 }
 
 type BlockDelta struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
 }
 
 type ContentBlockStopEvent struct {

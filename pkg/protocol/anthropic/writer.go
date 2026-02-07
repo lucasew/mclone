@@ -91,8 +91,13 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 				Type:  "content_block_start",
 				Index: contentIndex,
 				ContentBlock: ContentBlock{
-					Type: "tool_use", ID: id, Name: tc.Name, Input: tc.Arguments,
+					Type: "tool_use", ID: id, Name: tc.Name, Input: []byte("{}"),
 				},
+			})
+			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
+				Type:  "content_block_delta",
+				Index: contentIndex,
+				Delta: BlockDelta{Type: "input_json_delta", PartialJSON: string(tc.Arguments)},
 			})
 			protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
 				Type: "content_block_stop", Index: contentIndex,
