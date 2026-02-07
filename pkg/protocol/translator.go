@@ -24,11 +24,13 @@ type ToolCall struct {
 }
 
 type ContentBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text,omitempty"`
-	ID    string          `json:"id,omitempty"`
-	Name  string          `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 }
 
 func (m *IncomingMessage) ToMessage() (message.Message, error) {
@@ -76,9 +78,12 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 						ID: b.ID, Name: b.Name, Arguments: b.Input,
 					})
 				case "tool_result":
-					// Note: tool_result in content blocks is used by some protocols
+					id := b.ToolUseID
+					if id == "" {
+						id = b.ID
+					}
 					parts = append(parts, message.ToolResultPart{
-						ToolCallID: b.ID, Content: b.Text,
+						ToolCallID: id, Content: extractContent(b.Content),
 					})
 				}
 			}
@@ -127,6 +132,27 @@ func parseText(text string) []message.Part {
 		current = current[start+end+len("</thought>"):]
 	}
 	return parts
+}
+
+func extractContent(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var blocks []ContentBlock
+	if err := json.Unmarshal(raw, &blocks); err == nil {
+		var parts []string
+		for _, b := range blocks {
+			if b.Type == "text" {
+				parts = append(parts, b.Text)
+			}
+		}
+		return strings.Join(parts, "")
+	}
+	return string(raw)
 }
 
 func mergeTextParts(parts []message.Part) []message.Part {
