@@ -49,7 +49,6 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 		return nil, err
 	}
 
-	// Update tool cache for validation
 	for _, t := range options.Tools {
 		toolDefinitionCache.Store(t.Name, t)
 	}
@@ -98,7 +97,8 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 						if !ok {
 							id := part.FunctionCall.ID
 							if id == "" {
-								id = fmt.Sprintf("call_%d_%d", time.Now().UnixNano()%1000, i)
+								// Anthropic style ID
+								id = fmt.Sprintf("toolu_gen_%d_%d", time.Now().UnixNano()%1000000, i)
 							}
 							tc = &message.ToolCall{ID: id, Name: part.FunctionCall.Name}
 							toolCallsBuffer[i] = tc
@@ -114,17 +114,15 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 						}
 
 						if len(part.FunctionCall.Args) > 0 {
-							// Typed merge using json.RawMessage and map[string]json.RawMessage
-							currentArgs := make(map[string]json.RawMessage)
+							currentArgs := make(map[string]interface{})
 							if len(tc.Arguments) > 0 {
 								json.Unmarshal(tc.Arguments, &currentArgs)
 							}
 							for k, v := range part.FunctionCall.Args {
-								vb, _ := json.Marshal(v)
-								currentArgs[k] = vb
+								currentArgs[k] = v
 							}
 							b, _ := json.Marshal(currentArgs)
-							tc.Arguments = b
+							tc.Arguments = json.RawMessage(b)
 						}
 					}
 				}
@@ -136,7 +134,6 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 			for _, idx := range toolCallOrder {
 				tc := *toolCallsBuffer[idx]
 
-				// Validate against JSON Schema if available
 				if def, ok := toolDefinitionCache.Load(tc.Name); ok {
 					tDef := def.(message.ToolDefinition)
 					if len(tDef.Parameters) > 0 {
@@ -215,7 +212,7 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					parts = append(parts, &genai.Part{Text: v.Text, Thought: true})
 				}
 			case message.ToolCallPart:
-				args := make(map[string]json.RawMessage)
+				var args map[string]interface{}
 				json.Unmarshal(v.Arguments, &args)
 
 				sig := v.ThoughtSignature
@@ -225,21 +222,11 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					}
 				}
 
-				// The genai.FunctionCall.Args expects map[string]interface{}.
-				// Since we must use the SDK, we have to cast back to map[string]interface{}
-				// but we do it only at the boundary.
-				sdkArgs := make(map[string]interface{})
-				for k, raw := range args {
-					var val interface{}
-					json.Unmarshal(raw, &val)
-					sdkArgs[k] = val
-				}
-
 				parts = append(parts, &genai.Part{
 					FunctionCall: &genai.FunctionCall{
 						ID:   v.ID,
 						Name: v.Name,
-						Args: sdkArgs,
+						Args: args,
 					},
 					ThoughtSignature: sig,
 				})
@@ -248,11 +235,17 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 				if name == "" {
 					name = v.ToolCallID
 				}
+				content := v.Content
+				// Detect truncation and add hint
+				if strings.Contains(content, "output was truncated") && strings.Contains(content, "Full output saved to") {
+					content += "\n\nNote: The output above was truncated by the client. You can see the full output by reading the file path mentioned above using the Read tool."
+				}
+
 				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
 						ID:       v.ToolCallID,
 						Name:     name,
-						Response: map[string]interface{}{"result": v.Content},
+						Response: map[string]interface{}{"result": content},
 					},
 				})
 			}

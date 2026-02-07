@@ -50,11 +50,20 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 			continue
 		}
 		if resp.Thought != "" {
+			protocol.WriteSSE(rw, "content_block_start", ContentBlockStartEvent{
+				Type:         "content_block_start",
+				Index:        contentIndex,
+				ContentBlock: ContentBlock{Type: "text", Text: ""},
+			})
 			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
 				Type:  "content_block_delta",
 				Index: contentIndex,
 				Delta: BlockDelta{Type: "text_delta", Text: "<thought>" + resp.Thought + "</thought>"},
 			})
+			protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
+				Type: "content_block_stop", Index: contentIndex,
+			})
+			contentIndex++
 		}
 		if resp.Content != "" {
 			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
