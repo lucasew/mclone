@@ -79,7 +79,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages
 }
 
 func init() {
-	remote.Register("anthropic", func(name string, options map[string]string) (remote.Provider, error) {
+	remote.Register("anthropic", func(name string, options map[string]string, _ remote.Resolver) (remote.Provider, error) {
 		apiKey := options["api_key"]
 		return &AnthropicProvider{APIKey: apiKey}, nil
 	})

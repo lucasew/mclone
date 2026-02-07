@@ -146,7 +146,7 @@ func sanitizeSchema(schema map[string]any) map[string]any {
 }
 
 func init() {
-	remote.Register("gemini", func(name string, options map[string]string) (remote.Provider, error) {
+	remote.Register("gemini", func(name string, options map[string]string, _ remote.Resolver) (remote.Provider, error) {
 		return &GeminiProvider{APIKey: options["api_key"]}, nil
 	})
 }

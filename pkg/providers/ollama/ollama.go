@@ -101,7 +101,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []
 
 
 func init() {
-	remote.Register("ollama", func(name string, options map[string]string) (remote.Provider, error) {
+	remote.Register("ollama", func(name string, options map[string]string, _ remote.Resolver) (remote.Provider, error) {
 		baseURL := options["base_url"]
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"

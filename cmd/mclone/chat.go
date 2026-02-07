@@ -32,13 +32,8 @@ var chatCmd = &cobra.Command{
 			return
 		}
 
-		rc, ok := conf.Remotes[remoteName]
-		if !ok {
-			fmt.Printf("Remote %q not found in config\n", remoteName)
-			return
-		}
-
-		p, err := remote.NewProvider(rc.Type, remoteName, rc.Options)
+		resolve := remote.NewResolver(conf)
+		p, err := resolve(remoteName)
 		if err != nil {
 			fmt.Printf("Error creating provider: %v\n", err)
 			return

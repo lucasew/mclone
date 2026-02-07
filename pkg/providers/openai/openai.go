@@ -80,7 +80,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, modelName string, messages []
 }
 
 func init() {
-	remote.Register("openai", func(name string, options map[string]string) (remote.Provider, error) {
+	remote.Register("openai", func(name string, options map[string]string, _ remote.Resolver) (remote.Provider, error) {
 		baseURL := options["base_url"]
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"
