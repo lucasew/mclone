@@ -35,12 +35,19 @@ type TextPart struct {
 
 func (TextPart) isPart() {}
 
+// ThoughtPart represents a chain-of-thought or internal reasoning part.
+type ThoughtPart struct {
+	Text string
+}
+
+func (ThoughtPart) isPart() {}
+
 // ToolCallPart represents a tool/function call made by the assistant.
 type ToolCallPart struct {
 	ID               string
 	Name             string
-	Arguments        string // raw JSON
-	ThoughtSignature string
+	Arguments        json.RawMessage // raw JSON
+	ThoughtSignature []byte          // Original binary signature from Gemini
 }
 
 func (ToolCallPart) isPart() {}
@@ -57,7 +64,7 @@ func (ToolResultPart) isPart() {}
 type ToolDefinition struct {
 	Name        string
 	Description string
-	Parameters  map[string]any
+	Parameters  json.RawMessage // JSON Schema
 }
 
 // ChatOptions holds options for a chat request.
@@ -70,19 +77,20 @@ type ChatOptions struct {
 type ToolCall struct {
 	ID               string
 	Name             string
-	Arguments        string // raw JSON
-	ThoughtSignature string
+	Arguments        json.RawMessage // raw JSON
+	ThoughtSignature []byte
 }
 
 // ParseArguments unmarshals the arguments JSON into the target.
-func (tc ToolCall) ParseArguments(target any) error {
-	return json.Unmarshal([]byte(tc.Arguments), target)
+func ParseArguments[T interface{}](tc ToolCall, target *T) error {
+	return json.Unmarshal(tc.Arguments, target)
 }
 
 // ChatResponse represents a streaming chunk from a provider.
 type ChatResponse struct {
 	Content   string
 	ToolCalls []ToolCall
+	Thought   string
 	Done      bool
 	Error     error
 }

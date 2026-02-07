@@ -2,6 +2,7 @@ package message
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/tmc/langchaingo/llms"
 )
@@ -33,13 +34,15 @@ func toLangChainMessage(m Message) llms.MessageContent {
 		switch v := p.(type) {
 		case TextPart:
 			parts = append(parts, llms.TextContent{Text: v.Text})
+		case ThoughtPart:
+			parts = append(parts, llms.TextContent{Text: "<thought>" + v.Text + "</thought>"})
 		case ToolCallPart:
 			parts = append(parts, llms.ToolCall{
 				ID:   v.ID,
 				Type: "function",
 				FunctionCall: &llms.FunctionCall{
 					Name:      v.Name,
-					Arguments: v.Arguments,
+					Arguments: string(v.Arguments),
 				},
 			})
 		case ToolResultPart:
@@ -57,12 +60,14 @@ func toLangChainMessage(m Message) llms.MessageContent {
 func ToLangChainTools(tools []ToolDefinition) []llms.Tool {
 	out := make([]llms.Tool, len(tools))
 	for i, t := range tools {
+		var params map[string]interface{}
+		json.Unmarshal(t.Parameters, &params)
 		out[i] = llms.Tool{
 			Type: "function",
 			Function: &llms.FunctionDefinition{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  t.Parameters,
+				Parameters:  params,
 			},
 		}
 	}
@@ -89,7 +94,7 @@ func ToolCallFromLangChain(tc llms.ToolCall) ToolCall {
 	return ToolCall{
 		ID:        tc.ID,
 		Name:      tc.FunctionCall.Name,
-		Arguments: tc.FunctionCall.Arguments,
+		Arguments: json.RawMessage(tc.FunctionCall.Arguments),
 	}
 }
 

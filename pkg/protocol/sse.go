@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-func WriteSSE(w http.ResponseWriter, event string, data any) {
+func WriteSSE[T interface{}](w http.ResponseWriter, event string, data T) {
 	b, _ := json.Marshal(data)
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 	if f, ok := w.(http.Flusher); ok {
@@ -14,7 +14,7 @@ func WriteSSE(w http.ResponseWriter, event string, data any) {
 	}
 }
 
-func WriteSSEData(w http.ResponseWriter, data any) {
+func WriteSSEData[T interface{}](w http.ResponseWriter, data T) {
 	b, _ := json.Marshal(data)
 	fmt.Fprintf(w, "data: %s\n\n", b)
 	if f, ok := w.(http.Flusher); ok {
@@ -35,6 +35,6 @@ func SetStreamHeaders(w http.ResponseWriter) {
 	w.Header().Set("Connection", "keep-alive")
 }
 
-func WriteJSON(w http.ResponseWriter, data any) {
+func WriteJSON[T interface{}](w http.ResponseWriter, data T) {
 	json.NewEncoder(w).Encode(data)
 }

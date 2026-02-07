@@ -1,5 +1,7 @@
 package anthropic
 
+import "encoding/json"
+
 type MessageResponse struct {
 	ID           string         `json:"id"`
 	Type         string         `json:"type"`
@@ -12,11 +14,11 @@ type MessageResponse struct {
 }
 
 type ContentBlock struct {
-	Type  string `json:"type"`
-	Text  string `json:"text,omitempty"`
-	ID    string `json:"id,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Input any    `json:"input,omitempty"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 type Usage struct {

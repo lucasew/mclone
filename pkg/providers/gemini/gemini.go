@@ -2,20 +2,24 @@ package gemini
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
+	"github.com/xeipuuv/gojsonschema"
 	"google.golang.org/genai"
 )
 
-var thoughtRegex = regexp.MustCompile(`(?s)<thought>(.*?)</thought>`)
+// signatureCache stores ThoughtSignatures indexed by tool call ID.
+var signatureCache sync.Map
+
+// toolDefinitionCache stores ToolDefinitions indexed by name for validation.
+var toolDefinitionCache sync.Map
 
 type GeminiProvider struct {
 	APIKey string
@@ -45,10 +49,14 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 		return nil, err
 	}
 
+	// Update tool cache for validation
+	for _, t := range options.Tools {
+		toolDefinitionCache.Store(t.Name, t)
+	}
+
 	contents, systemInstruction := toGeminiContents(messages)
-	config := &genai.GenerateContentConfig{}
-	if systemInstruction != nil {
-		config.SystemInstruction = systemInstruction
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: systemInstruction,
 	}
 	if len(options.Tools) > 0 {
 		config.Tools = toGeminiTools(options.Tools)
@@ -63,9 +71,8 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 
 		slog.Debug("gemini_generate_start", "model", modelName, "msgs_len", len(messages))
 
-		// Map to accumulate tool calls by their index/ID in the candidate parts
-		toolCallsMap := make(map[string]*message.ToolCall)
-		var toolCallOrder []string
+		toolCallsBuffer := make(map[int]*message.ToolCall)
+		var toolCallOrder []int
 
 		for resp, err := range client.Models.GenerateContentStream(ctx, modelName, contents, config) {
 			if err != nil {
@@ -81,54 +88,67 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				for i, part := range cand.Content.Parts {
 					if part.Text != "" {
 						if part.Thought {
-							slog.Debug("gemini_thought_out", "len", len(part.Text))
-							out <- message.ChatResponse{Content: "<thought>" + part.Text + "</thought>"}
+							out <- message.ChatResponse{Thought: part.Text}
 						} else {
 							out <- message.ChatResponse{Content: part.Text}
 						}
 					}
 					if part.FunctionCall != nil {
-						// Create a stable key for this part index in this candidate
-						key := fmt.Sprintf("part_%d", i)
-
-						args, _ := json.Marshal(part.FunctionCall.Args)
-						sig := base64.StdEncoding.EncodeToString(part.ThoughtSignature)
-
-						id := part.FunctionCall.ID
-						if id == "" {
-							// If model doesn't provide ID, we check if we already assigned one for this part
-							if existing, ok := toolCallsMap[key]; ok {
-								id = existing.ID
-							} else {
-								id = fmt.Sprintf("%s-%d", part.FunctionCall.Name, time.Now().UnixNano())
+						tc, ok := toolCallsBuffer[i]
+						if !ok {
+							id := part.FunctionCall.ID
+							if id == "" {
+								id = fmt.Sprintf("call_%d_%d", time.Now().UnixNano()%1000, i)
 							}
+							tc = &message.ToolCall{ID: id, Name: part.FunctionCall.Name}
+							toolCallsBuffer[i] = tc
+							toolCallOrder = append(toolCallOrder, i)
 						}
 
-						if _, ok := toolCallsMap[key]; !ok {
-							toolCallOrder = append(toolCallOrder, key)
+						if part.FunctionCall.Name != "" {
+							tc.Name = part.FunctionCall.Name
+						}
+						if len(part.ThoughtSignature) > 0 {
+							tc.ThoughtSignature = part.ThoughtSignature
+							signatureCache.Store(tc.ID, part.ThoughtSignature)
 						}
 
-						toolCallsMap[key] = &message.ToolCall{
-							ID:               id,
-							Name:             part.FunctionCall.Name,
-							Arguments:        string(args),
-							ThoughtSignature: sig,
+						if len(part.FunctionCall.Args) > 0 {
+							// Typed merge using json.RawMessage and map[string]json.RawMessage
+							currentArgs := make(map[string]json.RawMessage)
+							if len(tc.Arguments) > 0 {
+								json.Unmarshal(tc.Arguments, &currentArgs)
+							}
+							for k, v := range part.FunctionCall.Args {
+								vb, _ := json.Marshal(v)
+								currentArgs[k] = vb
+							}
+							b, _ := json.Marshal(currentArgs)
+							tc.Arguments = b
 						}
-						slog.Debug("gemini_tool_call_buffered", "key", key, "name", part.FunctionCall.Name, "id", id)
 					}
 				}
 			}
 		}
 
 		if len(toolCallOrder) > 0 {
-			var finalCalls []message.ToolCall
-			for _, key := range toolCallOrder {
-				finalCalls = append(finalCalls, *toolCallsMap[key])
+			finalCalls := make([]message.ToolCall, 0, len(toolCallOrder))
+			for _, idx := range toolCallOrder {
+				tc := *toolCallsBuffer[idx]
+
+				// Validate against JSON Schema if available
+				if def, ok := toolDefinitionCache.Load(tc.Name); ok {
+					tDef := def.(message.ToolDefinition)
+					if len(tDef.Parameters) > 0 {
+						if err := validateToolCall(tc, tDef.Parameters); err != nil {
+							slog.Warn("tool_validation_failed", "name", tc.Name, "error", err)
+						}
+					}
+				}
+
+				finalCalls = append(finalCalls, tc)
 			}
-			slog.Info("gemini_sending_buffered_tool_calls", "count", len(finalCalls))
-			out <- message.ChatResponse{
-				ToolCalls: finalCalls,
-			}
+			out <- message.ChatResponse{ToolCalls: finalCalls}
 		}
 
 		slog.Debug("gemini_generate_done")
@@ -136,6 +156,25 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 	}()
 
 	return out, nil
+}
+
+func validateToolCall(tc message.ToolCall, schema json.RawMessage) error {
+	schemaLoader := gojsonschema.NewBytesLoader(schema)
+	documentLoader := gojsonschema.NewBytesLoader(tc.Arguments)
+
+	result, err := gojsonschema.Validate(schemaLoader, documentLoader)
+	if err != nil {
+		return err
+	}
+
+	if !result.Valid() {
+		var errors []string
+		for _, desc := range result.Errors() {
+			errors = append(errors, desc.String())
+		}
+		return fmt.Errorf("validation failed: %s", strings.Join(errors, ", "))
+	}
+	return nil
 }
 
 func (p *GeminiProvider) client() (*genai.Client, error) {
@@ -158,84 +197,81 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 		}
 	}
 
-	for i, m := range messages {
+	for _, m := range messages {
 		role := "user"
 		if m.Role == message.RoleAssistant {
 			role = "model"
 		}
 
-		c := &genai.Content{Role: role}
-
+		var parts []*genai.Part
 		for _, p := range m.Parts {
 			switch v := p.(type) {
 			case message.TextPart:
-				if v.Text == "" {
-					continue
+				if v.Text != "" {
+					parts = append(parts, genai.NewPartFromText(v.Text))
 				}
-				text := v.Text
-				lastIdx := 0
-				matches := thoughtRegex.FindAllStringSubmatchIndex(text, -1)
-				for _, match := range matches {
-					if match[0] > lastIdx {
-						preText := text[lastIdx:match[0]]
-						if strings.TrimSpace(preText) != "" {
-							c.Parts = append(c.Parts, genai.NewPartFromText(preText))
-						}
-					}
-					thoughtContent := text[match[2]:match[3]]
-					slog.Debug("gemini_thought_in", "msg_idx", i, "len", len(thoughtContent))
-					c.Parts = append(c.Parts, &genai.Part{
-						Text:    thoughtContent,
-						Thought: true,
-					})
-					lastIdx = match[1]
+			case message.ThoughtPart:
+				if v.Text != "" {
+					parts = append(parts, &genai.Part{Text: v.Text, Thought: true})
 				}
-				if lastIdx < len(text) {
-					postText := text[lastIdx:]
-					if strings.TrimSpace(postText) != "" {
-						c.Parts = append(c.Parts, genai.NewPartFromText(postText))
+			case message.ToolCallPart:
+				args := make(map[string]json.RawMessage)
+				json.Unmarshal(v.Arguments, &args)
+
+				sig := v.ThoughtSignature
+				if len(sig) == 0 {
+					if cached, ok := signatureCache.Load(v.ID); ok {
+						sig = cached.([]byte)
 					}
 				}
 
-			case message.ToolCallPart:
-				var args map[string]any
-				json.Unmarshal([]byte(v.Arguments), &args)
-				slog.Debug("gemini_tool_call_in", "msg_idx", i, "name", v.Name, "id", v.ID, "has_sig", v.ThoughtSignature != "")
-				c.Parts = append(c.Parts, &genai.Part{
+				// The genai.FunctionCall.Args expects map[string]interface{}.
+				// Since we must use the SDK, we have to cast back to map[string]interface{}
+				// but we do it only at the boundary.
+				sdkArgs := make(map[string]interface{})
+				for k, raw := range args {
+					var val interface{}
+					json.Unmarshal(raw, &val)
+					sdkArgs[k] = val
+				}
+
+				parts = append(parts, &genai.Part{
 					FunctionCall: &genai.FunctionCall{
 						ID:   v.ID,
 						Name: v.Name,
-						Args: args,
+						Args: sdkArgs,
 					},
-					ThoughtSignature: func() []byte {
-						b, _ := base64.StdEncoding.DecodeString(v.ThoughtSignature)
-						return b
-					}(),
+					ThoughtSignature: sig,
 				})
-
 			case message.ToolResultPart:
-				funcName := toolNames[v.ToolCallID]
-				if funcName == "" {
-					funcName = v.ToolCallID
+				name := toolNames[v.ToolCallID]
+				if name == "" {
+					name = v.ToolCallID
 				}
-				slog.Debug("gemini_tool_result_in", "msg_idx", i, "id", v.ToolCallID, "name", funcName)
-				c.Parts = append(c.Parts, &genai.Part{
+				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
-						ID:   v.ToolCallID,
-						Name: funcName,
-						Response: map[string]any{
-							"result": v.Content,
-						},
+						ID:       v.ToolCallID,
+						Name:     name,
+						Response: map[string]interface{}{"result": v.Content},
 					},
 				})
 			}
 		}
 
-		if m.Role == message.RoleSystem {
-			system = c
-			system.Role = "system"
-		} else if len(c.Parts) > 0 {
-			contents = append(contents, c)
+		if len(parts) > 0 {
+			if m.Role == message.RoleSystem {
+				if system == nil {
+					system = &genai.Content{Role: "system", Parts: parts}
+				} else {
+					system.Parts = append(system.Parts, parts...)
+				}
+			} else {
+				if len(contents) > 0 && contents[len(contents)-1].Role == role {
+					contents[len(contents)-1].Parts = append(contents[len(contents)-1].Parts, parts...)
+				} else {
+					contents = append(contents, &genai.Content{Role: role, Parts: parts})
+				}
+			}
 		}
 	}
 
@@ -245,10 +281,13 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 func toGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
 	decls := make([]*genai.FunctionDeclaration, len(tools))
 	for i, t := range tools {
+		var params map[string]interface{}
+		json.Unmarshal(t.Parameters, &params)
+
 		decls[i] = &genai.FunctionDeclaration{
 			Name:                 t.Name,
 			Description:          t.Description,
-			ParametersJsonSchema: t.Parameters,
+			ParametersJsonSchema: params,
 		}
 	}
 	return []*genai.Tool{{FunctionDeclarations: decls}}

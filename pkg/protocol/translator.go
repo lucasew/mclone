@@ -2,33 +2,33 @@ package protocol
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/message"
 )
 
 type IncomingMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content"`
+	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
 }
 
 type ToolCall struct {
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
 	} `json:"function"`
 }
 
-func splitID(id string) (string, string) {
-	if parts := strings.SplitN(id, "||", 2); len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return id, ""
+type ContentBlock struct {
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 func (m *IncomingMessage) ToMessage() (message.Message, error) {
@@ -41,107 +41,103 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 	case "user":
 		role = message.RoleUser
 	case "tool":
-		id, _ := splitID(m.ToolCallID)
+		var contentStr string
+		json.Unmarshal(m.Content, &contentStr)
+		if contentStr == "" {
+			contentStr = string(m.Content)
+		}
 		return message.Message{
 			Role: message.RoleTool,
 			Parts: []message.Part{
 				message.ToolResultPart{
-					ToolCallID: id,
-					Content:    fmt.Sprintf("%v", m.Content),
+					ToolCallID: m.ToolCallID,
+					Content:    contentStr,
 				},
 			},
 		}, nil
 	}
 
 	var parts []message.Part
-	switch v := m.Content.(type) {
-	case string:
-		parts = append(parts, message.TextPart{Text: v})
-	case []any:
-		for _, p := range v {
-			if pm, ok := p.(map[string]any); ok {
-				t, _ := pm["type"].(string)
-				switch t {
+
+	// Try parsing as string first
+	var contentStr string
+	if err := json.Unmarshal(m.Content, &contentStr); err == nil {
+		parts = append(parts, parseText(contentStr)...)
+	} else {
+		// Try parsing as list of blocks
+		var blocks []ContentBlock
+		if err := json.Unmarshal(m.Content, &blocks); err == nil {
+			for _, b := range blocks {
+				switch b.Type {
 				case "text":
-					if txt, ok := pm["text"].(string); ok {
-						parts = append(parts, message.TextPart{Text: txt})
-					}
+					parts = append(parts, parseText(b.Text)...)
 				case "tool_use":
-					idRaw, _ := pm["id"].(string)
-					name, _ := pm["name"].(string)
-					var args string
-					if input, ok := pm["input"].(map[string]any); ok {
-						b, _ := json.Marshal(input)
-						args = string(b)
-					}
-					id, signature := splitID(idRaw)
 					parts = append(parts, message.ToolCallPart{
-						ID: id, Name: name, Arguments: args,
-						ThoughtSignature: signature,
+						ID: b.ID, Name: b.Name, Arguments: b.Input,
 					})
 				case "tool_result":
-					idRaw, _ := pm["tool_use_id"].(string)
-					id, _ := splitID(idRaw)
-					contentStr := extractContent(pm["content"])
+					// Note: tool_result in content blocks is used by some protocols
 					parts = append(parts, message.ToolResultPart{
-						ToolCallID: id, Content: contentStr,
+						ToolCallID: b.ID, Content: b.Text,
 					})
 				}
 			}
 		}
 	}
 
-	// Merge consecutive text parts only for user messages
-	finalParts := parts
-	if m.Role == "user" {
-		finalParts = mergeTextParts(parts)
-	}
-
-	// Append OpenAI-style tool_calls from assistant messages
 	if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 		for _, tc := range m.ToolCalls {
-			id, signature := splitID(tc.ID)
-			finalParts = append(finalParts, message.ToolCallPart{
-				ID: id, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
-				ThoughtSignature: signature,
+			parts = append(parts, message.ToolCallPart{
+				ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
 			})
 		}
 	}
 
-	return message.Message{Role: role, Parts: finalParts}, nil
+	if role == message.RoleUser {
+		parts = mergeTextParts(parts)
+	}
+
+	return message.Message{Role: role, Parts: parts}, nil
 }
 
-func extractContent(raw any) string {
-	switch v := raw.(type) {
-	case string:
-		return v
-	case []any:
-		var parts []string
-		for _, item := range v {
-			if block, ok := item.(map[string]any); ok {
-				if txt, ok := block["text"].(string); ok {
-					parts = append(parts, txt)
-				}
-			}
-		}
-		return strings.Join(parts, "")
-	default:
-		b, _ := json.Marshal(raw)
-		return string(b)
+func parseText(text string) []message.Part {
+	if text == "" {
+		return nil
 	}
+	var parts []message.Part
+	current := text
+	for {
+		start := strings.Index(current, "<thought>")
+		if start == -1 {
+			if current != "" {
+				parts = append(parts, message.TextPart{Text: current})
+			}
+			break
+		}
+		if start > 0 {
+			parts = append(parts, message.TextPart{Text: current[:start]})
+		}
+		end := strings.Index(current[start:], "</thought>")
+		if end == -1 {
+			parts = append(parts, message.TextPart{Text: current[start:]})
+			break
+		}
+		thoughtContent := current[start+len("<thought>") : start+end]
+		parts = append(parts, message.ThoughtPart{Text: thoughtContent})
+		current = current[start+end+len("</thought>"):]
+	}
+	return parts
 }
 
 func mergeTextParts(parts []message.Part) []message.Part {
 	var result []message.Part
 	var currentText []string
-
 	flush := func() {
 		if len(currentText) > 0 {
 			result = append(result, message.TextPart{Text: strings.Join(currentText, "")})
 			currentText = nil
 		}
 	}
-
 	for _, p := range parts {
 		if tp, ok := p.(message.TextPart); ok {
 			currentText = append(currentText, tp.Text)
@@ -151,20 +147,19 @@ func mergeTextParts(parts []message.Part) []message.Part {
 		}
 	}
 	flush()
-
 	return result
 }
 
 type Tool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema,omitempty"`
-	Parameters  map[string]any `json:"parameters,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 func (t Tool) ToDefinition() message.ToolDefinition {
 	params := t.Parameters
-	if params == nil {
+	if len(params) == 0 {
 		params = t.InputSchema
 	}
 	return message.ToolDefinition{

@@ -29,20 +29,16 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 			slog.Error("openai_stream_error", "error", resp.Error)
 			continue
 		}
-		toolCalls := make([]message.ToolCall, len(resp.ToolCalls))
-		for i, tc := range resp.ToolCalls {
-			tc2 := tc
-			if tc2.ThoughtSignature != "" {
-				tc2.ID = tc2.ID + "||" + tc2.ThoughtSignature
-			}
-			toolCalls[i] = tc2
+		content := resp.Content
+		if resp.Thought != "" {
+			content = "<thought>" + resp.Thought + "</thought>" + content
 		}
 		chunk := ChatCompletionChunk{
 			ID:     "mclone",
 			Object: "chat.completion.chunk",
 			Model:  model,
 			Choices: []ChunkChoice{{
-				Delta: ChunkDelta{Content: resp.Content, ToolCalls: toolCalls},
+				Delta: ChunkDelta{Content: content, ToolCalls: resp.ToolCalls},
 			}},
 		}
 		if resp.Done {
@@ -64,6 +60,11 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.ChatRespons
 		if resp.Error != nil {
 			slog.Error("openai_json_error", "error", resp.Error)
 			continue
+		}
+		if resp.Thought != "" {
+			content.WriteString("<thought>")
+			content.WriteString(resp.Thought)
+			content.WriteString("</thought>")
 		}
 		content.WriteString(resp.Content)
 		toolCalls = append(toolCalls, resp.ToolCalls...)
@@ -88,9 +89,6 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.ChatRespons
 	}
 
 	for _, tc := range toolCalls {
-		if tc.ThoughtSignature != "" {
-			tc.ID = tc.ID + "||" + tc.ThoughtSignature
-		}
 		resp.Choices[0].Message.ToolCalls = append(resp.Choices[0].Message.ToolCalls, tc)
 	}
 

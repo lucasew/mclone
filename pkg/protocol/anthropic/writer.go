@@ -1,7 +1,6 @@
 package anthropic
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -50,6 +49,13 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 			slog.Error("anthropic_stream_error", "error", resp.Error)
 			continue
 		}
+		if resp.Thought != "" {
+			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
+				Type:  "content_block_delta",
+				Index: contentIndex,
+				Delta: BlockDelta{Type: "text_delta", Text: "<thought>" + resp.Thought + "</thought>"},
+			})
+		}
 		if resp.Content != "" {
 			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
 				Type:  "content_block_delta",
@@ -70,30 +76,19 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 			if id == "" {
 				id = fmt.Sprintf("toolu_%d", time.Now().UnixNano())
 			}
-			if tc.ThoughtSignature != "" {
-				id = id + "||" + tc.ThoughtSignature
-			}
-
-			input := parseToolInput(tc.Arguments)
 
 			slog.Info("sending_tool_use", "name", tc.Name, "id", id)
 			protocol.WriteSSE(rw, "content_block_start", ContentBlockStartEvent{
 				Type:  "content_block_start",
 				Index: contentIndex,
 				ContentBlock: ContentBlock{
-					Type: "tool_use", ID: id, Name: tc.Name, Input: input,
+					Type: "tool_use", ID: id, Name: tc.Name, Input: tc.Arguments,
 				},
 			})
 			protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
 				Type: "content_block_stop", Index: contentIndex,
 			})
 			contentIndex++
-
-			protocol.WriteSSE(rw, "content_block_start", ContentBlockStartEvent{
-				Type:         "content_block_start",
-				Index:        contentIndex,
-				ContentBlock: ContentBlock{Type: "text", Text: ""},
-			})
 		}
 	}
 
@@ -141,23 +136,12 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.ChatRespons
 		if id == "" {
 			id = fmt.Sprintf("toolu_%d", time.Now().UnixNano())
 		}
-		if tc.ThoughtSignature != "" {
-			id = id + "||" + tc.ThoughtSignature
-		}
 		resp.Content = append(resp.Content, ContentBlock{
 			Type: "tool_use", ID: id, Name: tc.Name,
-			Input: parseToolInput(tc.Arguments),
+			Input: tc.Arguments,
 		})
 	}
 
 	rw.Header().Set("Content-Type", "application/json")
 	protocol.WriteJSON(rw, resp)
-}
-
-func parseToolInput(args string) any {
-	var input any
-	if err := json.Unmarshal([]byte(args), &input); err != nil || input == nil {
-		input = map[string]any{}
-	}
-	return input
 }
