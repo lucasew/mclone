@@ -8,6 +8,8 @@ import (
 	_ "github.com/lucasew/mclone/pkg/providers/openai"
 	_ "github.com/lucasew/mclone/pkg/providers/route"
 	_ "github.com/lucasew/mclone/pkg/providers/search"
+	_ "github.com/lucasew/mclone/pkg/providers/webfetch"
 
+	_ "github.com/lucasew/mclone/pkg/search/ddg"
 	_ "github.com/lucasew/mclone/pkg/search/stub"
 )

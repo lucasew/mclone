@@ -214,8 +214,7 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ToolUnionParam {
 	var out []sdk.ToolUnionParam
 	for _, t := range tools {
 		switch {
-		case t.Type == "web_search_20250305",
-			t.Name == "web_search":
+		case t.Type == "web_search_20250305":
 			// Promote to native Anthropic web search
 			out = append(out, sdk.ToolUnionParam{
 				OfWebSearchTool20250305: &sdk.WebSearchTool20250305Param{},

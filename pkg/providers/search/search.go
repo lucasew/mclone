@@ -170,7 +170,7 @@ func init() {
 		}
 		searchName := options["search"]
 		if searchName == "" {
-			return nil, fmt.Errorf("search wrapper requires 'search' option (search remote name)")
+			searchName = "ddg"
 		}
 
 		base, err := resolve.Provider(providerName)
