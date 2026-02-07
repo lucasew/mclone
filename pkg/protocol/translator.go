@@ -24,6 +24,13 @@ type ToolCall struct {
 	} `json:"function"`
 }
 
+func splitID(id string) (string, string) {
+	if parts := strings.SplitN(id, "||", 2); len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return id, ""
+}
+
 func (m *IncomingMessage) ToMessage() (message.Message, error) {
 	role := message.RoleUser
 	switch m.Role {
@@ -34,11 +41,12 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 	case "user":
 		role = message.RoleUser
 	case "tool":
+		id, _ := splitID(m.ToolCallID)
 		return message.Message{
 			Role: message.RoleTool,
 			Parts: []message.Part{
 				message.ToolResultPart{
-					ToolCallID: m.ToolCallID,
+					ToolCallID: id,
 					Content:    fmt.Sprintf("%v", m.Content),
 				},
 			},
@@ -59,27 +67,21 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 						parts = append(parts, message.TextPart{Text: txt})
 					}
 				case "tool_use":
-					id, _ := pm["id"].(string)
+					idRaw, _ := pm["id"].(string)
 					name, _ := pm["name"].(string)
 					var args string
 					if input, ok := pm["input"].(map[string]any); ok {
 						b, _ := json.Marshal(input)
 						args = string(b)
 					}
-					var signature string
-					if parts := strings.SplitN(id, "||", 2); len(parts) == 2 {
-						id = parts[0]
-						signature = parts[1]
-					}
+					id, signature := splitID(idRaw)
 					parts = append(parts, message.ToolCallPart{
 						ID: id, Name: name, Arguments: args,
 						ThoughtSignature: signature,
 					})
 				case "tool_result":
-					id, _ := pm["tool_use_id"].(string)
-					if parts := strings.SplitN(id, "||", 2); len(parts) == 2 {
-						id = parts[0]
-					}
+					idRaw, _ := pm["tool_use_id"].(string)
+					id, _ := splitID(idRaw)
 					contentStr := extractContent(pm["content"])
 					parts = append(parts, message.ToolResultPart{
 						ToolCallID: id, Content: contentStr,
@@ -95,8 +97,10 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 	// Append OpenAI-style tool_calls from assistant messages
 	if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 		for _, tc := range m.ToolCalls {
+			id, signature := splitID(tc.ID)
 			finalParts = append(finalParts, message.ToolCallPart{
-				ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+				ID: id, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+				ThoughtSignature: signature,
 			})
 		}
 	}

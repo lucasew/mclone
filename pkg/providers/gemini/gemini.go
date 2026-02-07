@@ -63,24 +63,39 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				return
 			}
 
-			if text := resp.Text(); text != "" {
-				out <- message.ChatResponse{Content: text}
-			}
-
+			// We need to iterate over candidates to get Thought and ThoughtSignature
 			for _, cand := range resp.Candidates {
 				if cand.Content == nil {
 					continue
 				}
 				for _, part := range cand.Content.Parts {
+					if part.Text != "" {
+						if part.Thought {
+							slog.Debug("gemini_thought", "content", part.Text)
+							// Prepend thought to content so it's preserved in history
+							out <- message.ChatResponse{Content: "<thought>\n" + part.Text + "\n</thought>\n"}
+						} else {
+							out <- message.ChatResponse{Content: part.Text}
+						}
+					}
 					if part.FunctionCall != nil {
 						args, _ := json.Marshal(part.FunctionCall.Args)
-						slog.Info("gemini_tool_call", "name", part.FunctionCall.Name, "id", part.FunctionCall.ID)
+						sig := base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+
+						id := part.FunctionCall.ID
+						if id == "" {
+							// If Gemini doesn't provide an ID, we use the name as ID
+							// to satisfy OpenAI/Anthropic requirements and our own mapping.
+							id = part.FunctionCall.Name
+						}
+
+						slog.Info("gemini_tool_call", "name", part.FunctionCall.Name, "id", id, "sig_len", len(sig))
 						out <- message.ChatResponse{
 							ToolCalls: []message.ToolCall{{
-								ID:               part.FunctionCall.ID,
+								ID:               id,
 								Name:             part.FunctionCall.Name,
 								Arguments:        string(args),
-								ThoughtSignature: base64.StdEncoding.EncodeToString(part.ThoughtSignature),
+								ThoughtSignature: sig,
 							}},
 						}
 					}
@@ -125,7 +140,7 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 				}
 			}
 			if len(parts) > 0 {
-				system = &genai.Content{Parts: parts, Role: "user"}
+				system = &genai.Content{Parts: parts, Role: "system"}
 			}
 
 		case message.RoleUser:
