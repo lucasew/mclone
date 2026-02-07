@@ -97,7 +97,6 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 						if !ok {
 							id := part.FunctionCall.ID
 							if id == "" {
-								// Anthropic style ID
 								id = fmt.Sprintf("toolu_gen_%d_%d", time.Now().UnixNano()%1000000, i)
 							}
 							tc = &message.ToolCall{ID: id, Name: part.FunctionCall.Name}
@@ -212,8 +211,8 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					parts = append(parts, &genai.Part{Text: v.Text, Thought: true})
 				}
 			case message.ToolCallPart:
-				var args map[string]interface{}
-				json.Unmarshal(v.Arguments, &args)
+				sdkArgs := make(map[string]interface{})
+				json.Unmarshal(v.Arguments, &sdkArgs)
 
 				sig := v.ThoughtSignature
 				if len(sig) == 0 {
@@ -226,7 +225,7 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					FunctionCall: &genai.FunctionCall{
 						ID:   v.ID,
 						Name: v.Name,
-						Args: args,
+						Args: sdkArgs,
 					},
 					ThoughtSignature: sig,
 				})
@@ -236,7 +235,6 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					name = v.ToolCallID
 				}
 				content := v.Content
-				// Detect truncation and add hint
 				if strings.Contains(content, "output was truncated") && strings.Contains(content, "Full output saved to") {
 					content += "\n\nNote: The output above was truncated by the client. You can see the full output by reading the file path mentioned above using the Read tool."
 				}
@@ -259,6 +257,28 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					system.Parts = append(system.Parts, parts...)
 				}
 			} else {
+				// Consistency rule: FunctionResponse must immediately follow FunctionCall.
+				// If this content has FunctionResponses, we must check if we can merge it
+				// with a previous 'user' content or if it needs to be its own turn.
+
+				hasResponse := false
+				for _, p := range parts {
+					if p.FunctionResponse != nil {
+						hasResponse = true
+						break
+					}
+				}
+
+				if hasResponse && len(contents) > 0 {
+					last := contents[len(contents)-1]
+					// If last turn was model (as expected), we can put responses here.
+					// If there's already a user turn after model, we merge into it.
+					if last.Role == "user" {
+						last.Parts = append(last.Parts, parts...)
+						continue
+					}
+				}
+
 				if len(contents) > 0 && contents[len(contents)-1].Role == role {
 					contents[len(contents)-1].Parts = append(contents[len(contents)-1].Parts, parts...)
 				} else {
