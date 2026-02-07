@@ -163,11 +163,22 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 	var system *genai.Content
 	var rawTurns []*genai.Content
 
+	// Collect tool call names and determine which have valid thought signatures
 	toolNames := make(map[string]string)
+	unsignedCalls := make(map[string]bool)
 	for _, m := range messages {
 		for _, p := range m.Parts {
 			if tc, ok := p.(message.ToolCallPart); ok {
 				toolNames[tc.ID] = tc.Name
+				sig := tc.ThoughtSignature
+				if len(sig) == 0 {
+					if cached, ok := signatureCache.Load(tc.ID); ok {
+						sig = cached.([]byte)
+					}
+				}
+				if len(sig) == 0 {
+					unsignedCalls[tc.ID] = true
+				}
 			}
 		}
 	}
@@ -190,6 +201,14 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					parts = append(parts, &genai.Part{Text: v.Text, Thought: true})
 				}
 			case message.ToolCallPart:
+				if unsignedCalls[v.ID] {
+					// No thought signature available — degrade to text
+					slog.Debug("gemini_degrade_unsigned_call", "id", v.ID, "name", v.Name)
+					parts = append(parts, genai.NewPartFromText(
+						fmt.Sprintf("[Called tool %s(%s)]", v.Name, string(v.Arguments)),
+					))
+					continue
+				}
 				sdkArgs := make(map[string]interface{})
 				json.Unmarshal(v.Arguments, &sdkArgs)
 				sig := v.ThoughtSignature
@@ -205,7 +224,16 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 			case message.ToolResultPart:
 				name := toolNames[v.ToolCallID]
 				if name == "" {
-					name = v.ToolCallID
+					// Orphaned tool result (no matching tool call in history) — skip it
+					slog.Debug("gemini_skip_orphaned_tool_result", "tool_call_id", v.ToolCallID)
+					continue
+				}
+				if unsignedCalls[v.ToolCallID] {
+					// Corresponding call was degraded — degrade result too
+					parts = append(parts, genai.NewPartFromText(
+						fmt.Sprintf("[Tool %s returned: %s]", name, v.Content),
+					))
+					continue
 				}
 				content := v.Content
 				if strings.Contains(content, "output was truncated") {
