@@ -69,8 +69,29 @@ type ToolDefinition struct {
 
 // ChatOptions holds options for a chat request.
 type ChatOptions struct {
-	Tools    []ToolDefinition
-	JSONMode bool
+	Tools       []ToolDefinition
+	JSONMode    bool
+	Temperature *float64
+	TopP        *float64
+	MaxTokens   *int
+	Stop        []string
+}
+
+// WithDefaults fills nil fields from d (config defaults).
+func (o ChatOptions) WithDefaults(d ChatOptions) ChatOptions {
+	if o.Temperature == nil {
+		o.Temperature = d.Temperature
+	}
+	if o.TopP == nil {
+		o.TopP = d.TopP
+	}
+	if o.MaxTokens == nil {
+		o.MaxTokens = d.MaxTokens
+	}
+	if len(o.Stop) == 0 {
+		o.Stop = d.Stop
+	}
+	return o
 }
 
 // ToolCall represents a tool call in a response.

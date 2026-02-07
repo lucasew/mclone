@@ -52,6 +52,20 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
 	}
+	if options.Temperature != nil {
+		t := float32(*options.Temperature)
+		config.Temperature = &t
+	}
+	if options.MaxTokens != nil {
+		config.MaxOutputTokens = int32(*options.MaxTokens)
+	}
+	if options.TopP != nil {
+		t := float32(*options.TopP)
+		config.TopP = &t
+	}
+	if len(options.Stop) > 0 {
+		config.StopSequences = options.Stop
+	}
 	if len(options.Tools) > 0 {
 		config.Tools = toGeminiTools(options.Tools)
 	}

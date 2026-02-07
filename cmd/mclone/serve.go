@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/config"
@@ -30,6 +31,11 @@ type chatRequest struct {
 			Type string `json:"type"`
 		} `json:"format"`
 	} `json:"output_config,omitempty"`
+	Temperature   *float64 `json:"temperature,omitempty"`
+	TopP          *float64 `json:"top_p,omitempty"`
+	MaxTokens     *int     `json:"max_tokens,omitempty"`
+	Stop          any      `json:"stop,omitempty"`
+	StopSequences []string `json:"stop_sequences,omitempty"`
 }
 
 var serveCmd = &cobra.Command{
@@ -61,15 +67,21 @@ var serveCmd = &cobra.Command{
 			return
 		}
 
+		// Parse generation defaults from config options
+		var defaultOpts message.ChatOptions
+		if rc, ok := conf.Remotes[remoteName]; ok {
+			defaultOpts = parseGenerationDefaults(rc.Options)
+		}
+
 		anthropicWriter := anthropic.NewWriter()
 		openaiWriter := openai.NewWriter()
 
 		mux := http.NewServeMux()
 		mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
-			serveChatRequest(w, r, p, overrideModel, anthropicWriter, cmd)
+			serveChatRequest(w, r, p, overrideModel, anthropicWriter, cmd, defaultOpts)
 		})
 		mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-			serveChatRequest(w, r, p, overrideModel, openaiWriter, cmd)
+			serveChatRequest(w, r, p, overrideModel, openaiWriter, cmd, defaultOpts)
 		})
 		mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 			serveModels(w, r, p)
@@ -93,7 +105,7 @@ var serveCmd = &cobra.Command{
 	},
 }
 
-func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider, overrideModel string, writer protocol.Writer, cmd *cobra.Command) {
+func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider, overrideModel string, writer protocol.Writer, cmd *cobra.Command, defaultOpts message.ChatOptions) {
 	body, _ := io.ReadAll(r.Body)
 
 	if path, _ := cmd.Flags().GetString("save-raw-request"); path != "" {
@@ -136,6 +148,14 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 	if req.OutputConfig != nil && req.OutputConfig.Format.Type == "json_schema" {
 		opts.JSONMode = true
 	}
+
+	// Generation params from request
+	opts.Temperature = req.Temperature
+	opts.TopP = req.TopP
+	opts.MaxTokens = req.MaxTokens
+	opts.Stop = mergeStop(req.Stop, req.StopSequences)
+	// Fill nils with config defaults
+	opts = opts.WithDefaults(defaultOpts)
 
 	respChan, err := p.Chat(r.Context(), chatModel, msgs, opts)
 	if err != nil {
@@ -210,6 +230,46 @@ func serveModels(w http.ResponseWriter, r *http.Request, p remote.Provider) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func parseGenerationDefaults(opts map[string]string) message.ChatOptions {
+	var co message.ChatOptions
+	if v, ok := opts["temperature"]; ok {
+		f, _ := strconv.ParseFloat(v, 64)
+		co.Temperature = &f
+	}
+	if v, ok := opts["top_p"]; ok {
+		f, _ := strconv.ParseFloat(v, 64)
+		co.TopP = &f
+	}
+	if v, ok := opts["max_tokens"]; ok {
+		n, _ := strconv.Atoi(v)
+		co.MaxTokens = &n
+	}
+	if v, ok := opts["stop"]; ok {
+		co.Stop = strings.Split(v, ",")
+	}
+	return co
+}
+
+func mergeStop(stopField any, stopSequences []string) []string {
+	var result []string
+	switch v := stopField.(type) {
+	case string:
+		if v != "" {
+			result = append(result, v)
+		}
+	case []any:
+		for _, s := range v {
+			if str, ok := s.(string); ok {
+				result = append(result, str)
+			}
+		}
+	}
+	if len(result) == 0 {
+		result = stopSequences
+	}
+	return result
 }
 
 func init() {

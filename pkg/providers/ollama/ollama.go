@@ -10,7 +10,10 @@ import (
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
-	"github.com/tmc/langchaingo/llms/ollama"
+
+	sdk "github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 )
 
 type OllamaProvider struct {
@@ -47,58 +50,166 @@ func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 }
 
 func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	llm, err := ollama.New(
-		ollama.WithServerURL(p.BaseURL),
-		ollama.WithModel(modelName),
+	client := sdk.NewClient(
+		option.WithBaseURL(p.BaseURL+"/v1"),
+		option.WithAPIKey("ollama"),
 	)
-	if err != nil {
-		return nil, err
+
+	params := sdk.ChatCompletionNewParams{
+		Model:    sdk.ChatModel(modelName),
+		Messages: toSDKMessages(messages),
 	}
+
+	if options.Temperature != nil {
+		params.Temperature = sdk.Float(*options.Temperature)
+	}
+	if options.TopP != nil {
+		params.TopP = sdk.Float(*options.TopP)
+	}
+	if options.MaxTokens != nil {
+		params.MaxTokens = sdk.Int(int64(*options.MaxTokens))
+	}
+	if len(options.Stop) > 0 {
+		if len(options.Stop) == 1 {
+			params.Stop = sdk.ChatCompletionNewParamsStopUnion{
+				OfString: sdk.String(options.Stop[0]),
+			}
+		} else {
+			params.Stop = sdk.ChatCompletionNewParamsStopUnion{
+				OfStringArray: options.Stop,
+			}
+		}
+	}
+
+	if len(options.Tools) > 0 {
+		params.Tools = toSDKTools(options.Tools)
+	}
+
+	stream := client.Chat.Completions.NewStreaming(ctx, params)
 
 	out := make(chan message.ChatResponse)
 	go func() {
 		defer close(out)
+		defer stream.Close()
 
 		startTime := time.Now()
 		var hasSentContent bool
 
-		lcMsgs := message.ToLangChainMessages(messages)
-		lcOpts := message.ToLangChainOptions(options, func(ctx context.Context, chunk []byte) error {
-			if len(chunk) > 0 {
-				if !hasSentContent {
-					slog.Debug("ollama_first_token", "latency", time.Since(startTime).String())
-					hasSentContent = true
-				}
-				out <- message.ChatResponse{Content: string(chunk)}
-			}
-			return nil
-		})
+		acc := &sdk.ChatCompletionAccumulator{}
 
-		slog.Debug("ollama_request_start", "model", modelName)
-		resp, err := llm.GenerateContent(ctx, lcMsgs, lcOpts...)
-		if err != nil {
-			slog.Error("ollama_error", "error", err)
+		for stream.Next() {
+			chunk := stream.Current()
+			acc.AddChunk(chunk)
+
+			for _, choice := range chunk.Choices {
+				if choice.Delta.Content != "" {
+					if !hasSentContent {
+						slog.Debug("ollama_first_token", "latency", time.Since(startTime).String())
+						hasSentContent = true
+					}
+					out <- message.ChatResponse{Content: choice.Delta.Content}
+				}
+			}
+
+			if tc, ok := acc.JustFinishedToolCall(); ok {
+				slog.Info("ollama_tool_call", "name", tc.Name)
+				out <- message.ChatResponse{
+					ToolCalls: []message.ToolCall{{
+						ID:        tc.ID,
+						Name:      tc.Name,
+						Arguments: json.RawMessage(tc.Arguments),
+					}},
+				}
+			}
+		}
+		if err := stream.Err(); err != nil {
+			slog.Error("ollama_stream_error", "error", err)
 			out <- message.ChatResponse{Error: err}
 			return
 		}
 
-		if len(resp.Choices) > 0 {
-			aiMsg := resp.Choices[0]
-			if !hasSentContent && aiMsg.Content != "" {
-				slog.Debug("ollama_fallback_content", "len", len(aiMsg.Content))
-				out <- message.ChatResponse{Content: aiMsg.Content}
-			}
-			if len(aiMsg.ToolCalls) > 0 {
-				slog.Info("ollama_tool_calls", "count", len(aiMsg.ToolCalls))
-				out <- message.ChatResponse{ToolCalls: message.ToolCallsFromLangChain(aiMsg.ToolCalls)}
-			}
-		}
 		slog.Debug("ollama_request_done", "total_duration", time.Since(startTime).String())
 		out <- message.ChatResponse{Done: true}
 	}()
 	return out, nil
 }
 
+func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamUnion {
+	var out []sdk.ChatCompletionMessageParamUnion
+	for _, m := range messages {
+		switch m.Role {
+		case message.RoleSystem:
+			for _, p := range m.Parts {
+				if tp, ok := p.(message.TextPart); ok {
+					out = append(out, sdk.SystemMessage(tp.Text))
+				}
+			}
+		case message.RoleUser:
+			for _, p := range m.Parts {
+				switch v := p.(type) {
+				case message.TextPart:
+					out = append(out, sdk.UserMessage(v.Text))
+				case message.ToolResultPart:
+					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
+				}
+			}
+		case message.RoleAssistant:
+			var textContent string
+			var toolCalls []sdk.ChatCompletionMessageToolCallParam
+			for _, p := range m.Parts {
+				switch v := p.(type) {
+				case message.TextPart:
+					textContent += v.Text
+				case message.ToolCallPart:
+					toolCalls = append(toolCalls, sdk.ChatCompletionMessageToolCallParam{
+						ID:   v.ID,
+						Type: "function",
+						Function: sdk.ChatCompletionMessageToolCallFunctionParam{
+							Name:      v.Name,
+							Arguments: string(v.Arguments),
+						},
+					})
+				}
+			}
+			msg := sdk.ChatCompletionMessageParamUnion{
+				OfAssistant: &sdk.ChatCompletionAssistantMessageParam{
+					Content: sdk.ChatCompletionAssistantMessageParamContentUnion{
+						OfString: sdk.String(textContent),
+					},
+				},
+			}
+			if len(toolCalls) > 0 {
+				msg.OfAssistant.ToolCalls = toolCalls
+			}
+			out = append(out, msg)
+		case message.RoleTool:
+			for _, p := range m.Parts {
+				if v, ok := p.(message.ToolResultPart); ok {
+					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
+				}
+			}
+		}
+	}
+	return out
+}
+
+func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
+	out := make([]sdk.ChatCompletionToolParam, len(tools))
+	for i, t := range tools {
+		var params shared.FunctionParameters
+		json.Unmarshal(t.Parameters, &params)
+
+		out[i] = sdk.ChatCompletionToolParam{
+			Type: "function",
+			Function: shared.FunctionDefinitionParam{
+				Name:        t.Name,
+				Description: sdk.String(t.Description),
+				Parameters:  params,
+			},
+		}
+	}
+	return out
+}
 
 func init() {
 	remote.Register("ollama", func(name string, options map[string]string, _ remote.Resolver) (remote.Provider, error) {
