@@ -110,7 +110,10 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 		opts.Tools = make([]message.ToolDefinition, len(req.Tools))
 		for i, t := range req.Tools {
 			opts.Tools[i] = t.ToDefinition()
-			slog.Debug("tool_received", "name", t.Name, "has_input_schema", t.InputSchema != nil, "has_parameters", t.Parameters != nil)
+			if i == 0 {
+				schemaJSON, _ := json.Marshal(t)
+				slog.Debug("tool_sample", "name", t.Name, "schema", string(schemaJSON))
+			}
 		}
 		slog.Info("tools_configured", "count", len(opts.Tools))
 	}

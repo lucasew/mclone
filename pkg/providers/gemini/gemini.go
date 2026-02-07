@@ -35,6 +35,8 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 		return nil, err
 	}
 
+	options.Tools = sanitizeTools(options.Tools)
+
 	out := make(chan message.ChatResponse)
 	go func() {
 		defer close(out)
@@ -53,7 +55,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 		slog.Debug("gemini_request", "model", modelName, "msgs_len", len(messages))
 		resp, err := llm.GenerateContent(ctx, lcMsgs, lcOpts...)
 		if err != nil {
-			slog.Error("gemini_error", "error", err)
+			slog.Error("gemini_error", "error", fmt.Sprintf("%+v", err))
 			out <- message.ChatResponse{Error: err}
 			return
 		}
@@ -73,6 +75,54 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 	}()
 
 	return out, nil
+}
+
+func sanitizeTools(tools []message.ToolDefinition) []message.ToolDefinition {
+	out := make([]message.ToolDefinition, len(tools))
+	for i, t := range tools {
+		out[i] = message.ToolDefinition{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  sanitizeSchema(t.Parameters),
+		}
+	}
+	return out
+}
+
+func sanitizeSchema(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	clean := make(map[string]any, len(schema))
+	for k, v := range schema {
+		switch k {
+		case "$schema", "additionalProperties", "exclusiveMinimum", "exclusiveMaximum":
+			continue
+		case "properties":
+			if props, ok := v.(map[string]any); ok {
+				cleanProps := make(map[string]any, len(props))
+				for pk, pv := range props {
+					if pm, ok := pv.(map[string]any); ok {
+						cleanProps[pk] = sanitizeSchema(pm)
+					} else {
+						cleanProps[pk] = pv
+					}
+				}
+				clean[k] = cleanProps
+			} else {
+				clean[k] = v
+			}
+		case "items":
+			if items, ok := v.(map[string]any); ok {
+				clean[k] = sanitizeSchema(items)
+			} else {
+				clean[k] = v
+			}
+		default:
+			clean[k] = v
+		}
+	}
+	return clean
 }
 
 func init() {
