@@ -122,6 +122,30 @@ func interactiveConfig() {
 				fmt.Print("Enter namespace (user or org): ")
 				ns, _ := reader.ReadString('\n')
 				options["namespace"] = strings.TrimSpace(ns)
+			case "geminioauth":
+				fmt.Println("No specific options required (uses hardcoded client ID).")
+				fmt.Println("You will be prompted to authenticate in the browser upon first use.")
+			case "ddg":
+				fmt.Println("No options required for DuckDuckGo search.")
+			case "search":
+				fmt.Println("The Search provider wraps another provider (e.g., gemini) and uses a search backend (e.g., ddg).")
+
+				fmt.Print("Enter name of base provider (e.g. gemini): ")
+				prov, _ := reader.ReadString('\n')
+				options["provider"] = strings.TrimSpace(prov)
+
+				fmt.Print("Enter name of search backend (default: ddg): ")
+				searcher, _ := reader.ReadString('\n')
+				searcher = strings.TrimSpace(searcher)
+				if searcher == "" {
+					searcher = "ddg"
+				}
+				options["search"] = searcher
+			case "webfetch":
+				fmt.Println("The WebFetch provider wraps another provider to allow reading web pages.")
+				fmt.Print("Enter name of base provider (e.g. search_wrapper): ")
+				prov, _ := reader.ReadString('\n')
+				options["provider"] = strings.TrimSpace(prov)
 			}
 
 			conf.Remotes[name] = config.RemoteConfig{
