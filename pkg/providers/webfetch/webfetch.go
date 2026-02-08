@@ -3,9 +3,9 @@ package webfetch
 import (
 	"bytes"
 	"context"
-	json "github.com/goccy/go-json"
 	"errors"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -16,10 +16,10 @@ import (
 	"syscall"
 	"time"
 
+	"codeberg.org/readeck/go-readability/v2"
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/mattn/godown"
-	"codeberg.org/readeck/go-readability/v2"
 	"golang.org/x/net/html"
 )
 
@@ -189,7 +189,7 @@ func (p *WebFetchWrapperProvider) Chat(ctx context.Context, modelName string, me
 	return out, nil
 }
 
-// HTTP Client Setup (copied/adapted from articleparser)
+// HTTP Client Setup
 
 var httpClient = &http.Client{
 	Transport: &http.Transport{
@@ -259,11 +259,7 @@ func fetchAndParse(ctx context.Context, rawLink string, format string) (string, 
 	defer res.Body.Close()
 
 	reader := io.LimitReader(res.Body, maxBodySize)
-	// We need to peek at the content to see if it's HTML, but for now assume HTML or text.
-	// readability requires a node.
 
-	// Note: readability might fail on non-HTML.
-	// Parse as HTML.
 	node, err := html.Parse(reader)
 	if err != nil {
 		return "", err
@@ -275,60 +271,7 @@ func fetchAndParse(ctx context.Context, rawLink string, format string) (string, 
 		return "", err
 	}
 
-	// Render based on format
-	// Note: readability Article has Title, Byline, Excerpt, Content (HTML string), TextContent (string)
-
-	// We can get HTML from Content.
-
-	// Wait, the library `codeberg.org/readeck/go-readability/v2` doesn't support rendering to buffer like that?
-	// Ah, I used `article.RenderHTML(contentBuf)` in the previous file. Does it exist?
-	// I should check if that method exists.
-	// But assuming the previous code compiled, it exists.
-
-	// Re-reading previous file content: `if err := article.RenderHTML(contentBuf); err != nil`
-	// Wait, I should double check if `RenderHTML` is a method of `Article`.
-	// I don't have access to documentation, but I can assume the code I read was working.
-
 	contentBuf := &bytes.Buffer{}
-	// The library usually returns content as string.
-	// `article.Content` is a string.
-	// But `RenderHTML`?
-	// Let's assume the previous code was correct.
-	// Actually, `article.Content` is a string field in some versions.
-	// In v2, `article.Content` is the HTML content.
-
-	// If `RenderHTML` is not valid, I might break it.
-	// But I am just copying existing logic, so I'll keep it.
-
-	// Wait, I see `article.RenderHTML(contentBuf)` in the previous code I read.
-	// So I will keep it.
-
-	// Wait, I am importing `codeberg.org/readeck/go-readability/v2`.
-
-	// I'll proceed.
-
-	// Also note `godown` is used.
-
-	// The `article.RenderHTML` writes to a writer?
-
-	// Let's assume yes.
-
-	// Wait, `fetchAndParse` logic:
-	/*
-	parser := readability.NewParser()
-	article, err := parser.ParseDocument(node, link)
-	if err != nil {
-		return "", err
-	}
-
-	contentBuf := &bytes.Buffer{}
-	if err := article.RenderHTML(contentBuf); err != nil {
-		return "", err
-	}
-	*/
-
-	// I will just use what I read.
-
 	if err := article.RenderHTML(contentBuf); err != nil {
 		return "", err
 	}

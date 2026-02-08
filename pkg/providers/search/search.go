@@ -2,8 +2,8 @@ package search
 
 import (
 	"context"
-	json "github.com/goccy/go-json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"log/slog"
 	"strings"
 

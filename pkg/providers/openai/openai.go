@@ -2,8 +2,8 @@ package openai
 
 import (
 	"context"
-	json "github.com/goccy/go-json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
 
@@ -170,7 +170,7 @@ func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamU
 					textContent += v.Text
 				case message.ToolCallPart:
 					toolCalls = append(toolCalls, sdk.ChatCompletionMessageToolCallParam{
-						ID:   v.ID,
+						ID: v.ID,
 						Function: sdk.ChatCompletionMessageToolCallFunctionParam{
 							Name:      v.Name,
 							Arguments: string(v.Arguments),
@@ -214,9 +214,9 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
 
 		out = append(out, sdk.ChatCompletionToolParam{
 			Function: shared.FunctionDefinitionParam{
-				Name:        t.Name, // string
+				Name:        t.Name,                    // string
 				Description: sdk.String(t.Description), // param.Opt[string]
-				Parameters:  params, // shared.FunctionParameters
+				Parameters:  params,                    // shared.FunctionParameters
 			},
 		})
 	}

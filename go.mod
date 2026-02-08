@@ -5,8 +5,10 @@ go 1.25.6
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.1
 	github.com/anthropics/anthropic-sdk-go v1.22.0
+	github.com/goccy/go-json v0.10.5
 	github.com/jedib0t/go-pretty/v6 v6.7.8
 	github.com/mattn/godown v0.0.1
+	github.com/mitchellh/mapstructure v1.5.0
 	github.com/openai/openai-go v1.12.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/spf13/cobra v1.10.2
@@ -25,7 +27,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
-	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
@@ -34,7 +35,6 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
-	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
