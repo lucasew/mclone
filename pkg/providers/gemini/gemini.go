@@ -17,14 +17,17 @@ import (
 var signatureCache sync.Map
 var toolDefinitionCache sync.Map
 
+type ClientFactory func(ctx context.Context) (*genai.Client, error)
+
 type GeminiProvider struct {
-	APIKey string
+	APIKey        string
+	ClientFactory ClientFactory
 }
 
 func (p *GeminiProvider) Name() string { return "gemini" }
 
 func (p *GeminiProvider) List(ctx context.Context) ([]remote.Model, error) {
-	client, err := p.client()
+	client, err := p.client(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +42,7 @@ func (p *GeminiProvider) List(ctx context.Context) ([]remote.Model, error) {
 }
 
 func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	client, err := p.client()
+	client, err := p.client(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +51,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 		toolDefinitionCache.Store(t.Name, t)
 	}
 
-	contents, systemInstruction := toGeminiContents(messages)
+	contents, systemInstruction := ToGeminiContents(messages)
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
 	}
@@ -67,7 +70,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 		config.StopSequences = options.Stop
 	}
 	if len(options.Tools) > 0 {
-		config.Tools = toGeminiTools(options.Tools)
+		config.Tools = ToGeminiTools(options.Tools)
 	}
 	if options.JSONMode {
 		config.ResponseMIMEType = "application/json"
@@ -141,7 +144,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				if def, ok := toolDefinitionCache.Load(tc.Name); ok {
 					tDef := def.(message.ToolDefinition)
 					if len(tDef.Parameters) > 0 {
-						tc.Arguments = cleanToolCallArgs(tc, tDef.Parameters)
+						tc.Arguments = CleanToolCallArgs(tc, tDef.Parameters)
 					}
 				}
 				finalCalls = append(finalCalls, tc)
@@ -153,7 +156,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 	return out, nil
 }
 
-func cleanToolCallArgs(tc message.ToolCall, schema json.RawMessage) json.RawMessage {
+func CleanToolCallArgs(tc message.ToolCall, schema json.RawMessage) json.RawMessage {
 	var schemaDef struct {
 		Properties map[string]json.RawMessage `json:"properties"`
 	}
@@ -185,13 +188,16 @@ func cleanToolCallArgs(tc message.ToolCall, schema json.RawMessage) json.RawMess
 	return json.RawMessage(cleaned)
 }
 
-func (p *GeminiProvider) client() (*genai.Client, error) {
-	return genai.NewClient(context.Background(), &genai.ClientConfig{
+func (p *GeminiProvider) client(ctx context.Context) (*genai.Client, error) {
+	if p.ClientFactory != nil {
+		return p.ClientFactory(ctx)
+	}
+	return genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: p.APIKey, Backend: genai.BackendGeminiAPI,
 	})
 }
 
-func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Content) {
+func ToGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Content) {
 	var system *genai.Content
 	var rawTurns []*genai.Content
 
@@ -422,7 +428,7 @@ func toGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 	return result, system
 }
 
-func toGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
+func ToGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
 	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
 	for _, t := range tools {
 		if t.Type != "" && t.Type != "function" {
@@ -437,7 +443,7 @@ func toGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
 				"properties": map[string]interface{}{},
 			}
 		}
-		cleanSchema(params)
+		CleanSchema(params)
 		desc := t.Description
 		if desc == "" {
 			desc = t.Name
@@ -450,7 +456,7 @@ func toGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
 }
 
 // cleanSchema recursively removes JSON Schema fields that Gemini doesn't support.
-func cleanSchema(m map[string]interface{}) {
+func CleanSchema(m map[string]interface{}) {
 	delete(m, "$schema")
 	delete(m, "additionalProperties")
 
@@ -462,13 +468,13 @@ func cleanSchema(m map[string]interface{}) {
 	if props, ok := m["properties"].(map[string]interface{}); ok {
 		for _, v := range props {
 			if sub, ok := v.(map[string]interface{}); ok {
-				cleanSchema(sub)
+				CleanSchema(sub)
 			}
 		}
 	}
 	// Recurse into items
 	if items, ok := m["items"].(map[string]interface{}); ok {
-		cleanSchema(items)
+		CleanSchema(items)
 	}
 }
 
