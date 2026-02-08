@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -156,30 +157,91 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 		// URL for streaming: v1internal:streamGenerateContent?alt=sse
 		url := "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
 
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
-		if err != nil {
-			out <- message.ChatResponse{Error: err}
-			return
-		}
+		var resp *http.Response
+		maxRetries := 5
+		baseDelay := 1 * time.Second
 
-		req.Header.Set("Authorization", "Bearer "+p.token.AccessToken)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
-		req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
-		req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
+			if err != nil {
+				out <- message.ChatResponse{Error: err}
+				return
+			}
 
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			out <- message.ChatResponse{Error: err}
-			return
-		}
-		defer resp.Body.Close()
+			req.Header.Set("Authorization", "Bearer "+p.token.AccessToken)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
+			req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
+			req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
 
-		if resp.StatusCode != http.StatusOK {
+			resp, err = http.DefaultClient.Do(req)
+			if err != nil {
+				out <- message.ChatResponse{Error: err}
+				return
+			}
+
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+
+			// Handle errors
 			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+
+			// Check for 429 or 503
+			if resp.StatusCode == 429 || resp.StatusCode == 503 {
+				// Parse retry delay
+				delay := baseDelay * time.Duration(math.Pow(2, float64(attempt))) // Exponential backoff default
+
+				// Try to parse detailed error for retry info
+				var errResp struct {
+					Error struct {
+						Code    int
+						Message string
+						Details []map[string]interface{}
+					}
+				}
+				if json.Unmarshal(body, &errResp) == nil {
+					// Check details for RetryInfo
+					for _, det := range errResp.Error.Details {
+						if det["@type"] == "type.googleapis.com/google.rpc.RetryInfo" {
+							if retryDelayStr, ok := det["retryDelay"].(string); ok {
+								if d, err := time.ParseDuration(retryDelayStr); err == nil {
+									delay = d + 100*time.Millisecond // Add buffer
+								}
+							}
+						}
+					}
+				}
+
+				// Check header
+				if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+					if d, err := time.ParseDuration(retryAfter + "s"); err == nil {
+						delay = d
+					}
+				}
+
+				if attempt == maxRetries {
+					out <- message.ChatResponse{Error: fmt.Errorf("api error %d (max retries reached): %s", resp.StatusCode, string(body))}
+					return
+				}
+
+				slog.Warn("gemini_rate_limit", "status", resp.StatusCode, "retry_after", delay, "attempt", attempt+1)
+
+				select {
+				case <-time.After(delay):
+					continue
+				case <-ctx.Done():
+					out <- message.ChatResponse{Error: ctx.Err()}
+					return
+				}
+			}
+
+			// Fatal error
 			out <- message.ChatResponse{Error: fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))}
 			return
 		}
+		defer resp.Body.Close()
 
 		// Parse SSE stream
 		reader := bufio.NewReader(resp.Body)
