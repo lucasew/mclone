@@ -44,7 +44,7 @@ var scopes = []string{
 type GeminiOAuthProvider struct {
 	base     *gemini.GeminiProvider
 	name     string
-	options  map[string]string
+	options  map[string]any
 	resolver remote.Resolver
 	token    *TokenData
 	loginMu  sync.Mutex
@@ -492,8 +492,8 @@ func (p *GeminiOAuthProvider) loadToken() (*TokenData, error) {
 	}
 
 	// Load from options
-	tokenJSON := p.options["token"]
-	if tokenJSON == "" {
+	tokenJSON, ok := p.options["token"].(string)
+	if !ok || tokenJSON == "" {
 		return nil, fmt.Errorf("no token found in config")
 	}
 
@@ -513,7 +513,7 @@ func (p *GeminiOAuthProvider) saveToken(token *TokenData) error {
 	}
 
 	if p.resolver.UpdateOptions != nil {
-		updates := map[string]string{
+		updates := map[string]any{
 			"token": string(data),
 		}
 		return p.resolver.UpdateOptions(p.name, updates)
@@ -704,7 +704,7 @@ func openBrowser(url string) {
 }
 
 func init() {
-	remote.Register("geminioauth", func(name string, options map[string]string, resolve remote.Resolver) (remote.Provider, error) {
+	remote.Register("geminioauth", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
 		prov := &GeminiOAuthProvider{
 			name:     name,
 			options:  options, // keep a copy to read initial token

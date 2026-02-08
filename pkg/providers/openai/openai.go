@@ -20,6 +20,11 @@ type OpenAIProvider struct {
 	APIKey  string
 }
 
+type OpenAIConfig struct {
+	APIKey  string `mapstructure:"api_key"`
+	BaseURL string `mapstructure:"base_url"`
+}
+
 func (p *OpenAIProvider) Name() string { return "openai" }
 
 func (p *OpenAIProvider) List(ctx context.Context) ([]remote.Model, error) {
@@ -60,7 +65,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, modelName string, messages []
 	)
 
 	params := sdk.ChatCompletionNewParams{
-		Model:    sdk.ChatModel(modelName),
+		Model:    modelName,
 		Messages: toSDKMessages(messages),
 	}
 
@@ -136,19 +141,25 @@ func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamU
 	for _, m := range messages {
 		switch m.Role {
 		case message.RoleSystem:
+			var textContent string
 			for _, p := range m.Parts {
 				if tp, ok := p.(message.TextPart); ok {
-					out = append(out, sdk.SystemMessage(tp.Text))
+					textContent += tp.Text
 				}
 			}
+			out = append(out, sdk.SystemMessage(textContent))
 		case message.RoleUser:
+			var textContent string
 			for _, p := range m.Parts {
 				switch v := p.(type) {
 				case message.TextPart:
-					out = append(out, sdk.UserMessage(v.Text))
+					textContent += v.Text
 				case message.ToolResultPart:
 					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
 				}
+			}
+			if textContent != "" {
+				out = append(out, sdk.UserMessage(textContent))
 			}
 		case message.RoleAssistant:
 			var textContent string
@@ -160,7 +171,6 @@ func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamU
 				case message.ToolCallPart:
 					toolCalls = append(toolCalls, sdk.ChatCompletionMessageToolCallParam{
 						ID:   v.ID,
-						Type: "function",
 						Function: sdk.ChatCompletionMessageToolCallFunctionParam{
 							Name:      v.Name,
 							Arguments: string(v.Arguments),
@@ -168,17 +178,19 @@ func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamU
 					})
 				}
 			}
-			msg := sdk.ChatCompletionMessageParamUnion{
-				OfAssistant: &sdk.ChatCompletionAssistantMessageParam{
-					Content: sdk.ChatCompletionAssistantMessageParamContentUnion{
-						OfString: sdk.String(textContent),
-					},
-				},
-			}
+
 			if len(toolCalls) > 0 {
-				msg.OfAssistant.ToolCalls = toolCalls
+				out = append(out, sdk.ChatCompletionMessageParamUnion{
+					OfAssistant: &sdk.ChatCompletionAssistantMessageParam{
+						Content: sdk.ChatCompletionAssistantMessageParamContentUnion{
+							OfString: sdk.String(textContent),
+						},
+						ToolCalls: toolCalls,
+					},
+				})
+			} else {
+				out = append(out, sdk.AssistantMessage(textContent))
 			}
-			out = append(out, msg)
 		case message.RoleTool:
 			for _, p := range m.Parts {
 				if v, ok := p.(message.ToolResultPart); ok {
@@ -201,11 +213,10 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
 		json.Unmarshal(t.Parameters, &params)
 
 		out = append(out, sdk.ChatCompletionToolParam{
-			Type: "function",
 			Function: shared.FunctionDefinitionParam{
-				Name:        t.Name,
-				Description: sdk.String(t.Description),
-				Parameters:  params,
+				Name:        t.Name, // string
+				Description: sdk.String(t.Description), // param.Opt[string]
+				Parameters:  params, // shared.FunctionParameters
 			},
 		})
 	}
@@ -213,12 +224,15 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
 }
 
 func init() {
-	remote.Register("openai", func(name string, options map[string]string, _ remote.Resolver) (remote.Provider, error) {
-		baseURL := options["base_url"]
+	remote.Register("openai", func(name string, options map[string]any, _ remote.Resolver) (remote.Provider, error) {
+		var cfg OpenAIConfig
+		if err := remote.DecodeOptions(options, &cfg); err != nil {
+			return nil, err
+		}
+		baseURL := cfg.BaseURL
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"
 		}
-		apiKey := options["api_key"]
-		return &OpenAIProvider{BaseURL: baseURL, APIKey: apiKey}, nil
+		return &OpenAIProvider{BaseURL: baseURL, APIKey: cfg.APIKey}, nil
 	})
 }

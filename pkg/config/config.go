@@ -8,8 +8,8 @@ import (
 )
 
 type RemoteConfig struct {
-	Type    string            `toml:"type"`
-	Options map[string]string `toml:"options"`
+	Type    string         `toml:"type"`
+	Options map[string]any `toml:"options"`
 }
 
 type Config struct {

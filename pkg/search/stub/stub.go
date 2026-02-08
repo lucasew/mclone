@@ -19,7 +19,7 @@ func (s *StubSearcher) Search(ctx context.Context, query string, maxResults int)
 }
 
 func init() {
-	remote.RegisterSearcher("stub_search", func(name string, options map[string]string) (remote.Searcher, error) {
+	remote.RegisterSearcher("stub_search", func(name string, options map[string]any) (remote.Searcher, error) {
 		return &StubSearcher{}, nil
 	})
 }

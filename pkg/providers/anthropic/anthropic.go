@@ -18,6 +18,11 @@ type AnthropicProvider struct {
 	APIKey  string
 }
 
+type AnthropicConfig struct {
+	APIKey  string `mapstructure:"api_key"`
+	BaseURL string `mapstructure:"base_url"`
+}
+
 func (p *AnthropicProvider) Name() string { return "anthropic" }
 
 func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
@@ -267,8 +272,11 @@ func listToolNames(tools []sdk.ToolUnionParam) []string {
 }
 
 func init() {
-	remote.Register("anthropic", func(name string, options map[string]string, _ remote.Resolver) (remote.Provider, error) {
-		apiKey := options["api_key"]
-		return &AnthropicProvider{APIKey: apiKey, BaseURL: options["base_url"]}, nil
+	remote.Register("anthropic", func(name string, options map[string]any, _ remote.Resolver) (remote.Provider, error) {
+		var cfg AnthropicConfig
+		if err := remote.DecodeOptions(options, &cfg); err != nil {
+			return nil, err
+		}
+		return &AnthropicProvider{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL}, nil
 	})
 }

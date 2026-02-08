@@ -7,15 +7,16 @@ import (
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/config"
+	"github.com/mitchellh/mapstructure"
 )
 
-type Factory func(name string, options map[string]string, resolve Resolver) (Provider, error)
+type Factory func(name string, options map[string]any, resolve Resolver) (Provider, error)
 
 // Resolver provides access to both provider and searcher resolution.
 type Resolver struct {
 	Provider      func(remoteName string) (Provider, error)
 	Searcher      func(remoteName string) (Searcher, error)
-	UpdateOptions func(remoteName string, options map[string]string) error
+	UpdateOptions func(remoteName string, options map[string]any) error
 }
 
 var registry = make(map[string]Factory)
@@ -75,7 +76,7 @@ func NewResolver(conf *config.Config) Resolver {
 		return s, nil
 	}
 
-	resolve.UpdateOptions = func(remoteName string, options map[string]string) error {
+	resolve.UpdateOptions = func(remoteName string, options map[string]any) error {
 		// Reload config to avoid overwriting concurrent changes (though mclone is mostly single process)
 		c, err := config.LoadConfig()
 		if err != nil {
@@ -90,7 +91,7 @@ func NewResolver(conf *config.Config) Resolver {
 
 		// Merge options
 		if rc.Options == nil {
-			rc.Options = make(map[string]string)
+			rc.Options = make(map[string]any)
 		}
 		for k, v := range options {
 			rc.Options[k] = v
@@ -138,7 +139,7 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 	}
 
 	// Build implicit balance group
-	groupOpts := map[string]string{}
+	groupOpts := map[string]any{}
 	if exactMatch {
 		groupOpts = rc.Options
 	}
@@ -148,7 +149,7 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 		return nil, fmt.Errorf("balance provider not registered")
 	}
 
-	opts := make(map[string]string)
+	opts := make(map[string]any)
 	for k, v := range groupOpts {
 		opts[k] = v
 	}
@@ -165,10 +166,27 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 	return factory(remoteName, opts, resolve)
 }
 
-func NewProvider(typeName string, name string, options map[string]string) (Provider, error) {
+func NewProvider(typeName string, name string, options map[string]any) (Provider, error) {
 	factory, ok := registry[typeName]
 	if !ok {
 		return nil, fmt.Errorf("unknown provider type: %s", typeName)
 	}
 	return factory(name, options, Resolver{})
+}
+
+// DecodeOptions decodes input into output using mapstructure with weak typing.
+func DecodeOptions(input interface{}, output interface{}) error {
+	config := &mapstructure.DecoderConfig{
+		Metadata:         nil,
+		Result:           output,
+		WeaklyTypedInput: true,
+		TagName:          "mapstructure",
+	}
+
+	decoder, err := mapstructure.NewDecoder(config)
+	if err != nil {
+		return err
+	}
+
+	return decoder.Decode(input)
 }

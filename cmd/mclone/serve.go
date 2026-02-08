@@ -110,8 +110,6 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 	var req chatRequest
 	var bodyReader io.Reader = r.Body
 
-	// If we need to save the raw request, we must read it all into memory first
-	// otherwise we can stream directly
 	if path, _ := cmd.Flags().GetString("save-raw-request"); path != "" {
 		body, _ := io.ReadAll(r.Body)
 		err := os.WriteFile(path, body, 0644)
@@ -120,7 +118,6 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 		} else {
 			slog.Debug("saved raw request", "path", path)
 		}
-		// Re-create reader for the decoder
 		bodyReader = bytes.NewReader(body)
 	}
 
@@ -160,12 +157,10 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 		opts.JSONMode = true
 	}
 
-	// Generation params from request
 	opts.Temperature = req.Temperature
 	opts.TopP = req.TopP
 	opts.MaxTokens = req.MaxTokens
 	opts.Stop = mergeStop(req.Stop, req.StopSequences)
-	// Fill nils with config defaults
 	opts = opts.WithDefaults(defaultOpts)
 
 	respChan, err := p.Chat(r.Context(), chatModel, msgs, opts)
@@ -243,22 +238,59 @@ func serveModels(w http.ResponseWriter, r *http.Request, p remote.Provider) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func parseGenerationDefaults(opts map[string]string) message.ChatOptions {
+func parseGenerationDefaults(opts map[string]any) message.ChatOptions {
 	var co message.ChatOptions
+
 	if v, ok := opts["temperature"]; ok {
-		f, _ := strconv.ParseFloat(v, 64)
-		co.Temperature = &f
+		switch val := v.(type) {
+		case float64:
+			co.Temperature = &val
+		case string:
+			if f, err := strconv.ParseFloat(val, 64); err == nil {
+				co.Temperature = &f
+			}
+		}
 	}
+
 	if v, ok := opts["top_p"]; ok {
-		f, _ := strconv.ParseFloat(v, 64)
-		co.TopP = &f
+		switch val := v.(type) {
+		case float64:
+			co.TopP = &val
+		case string:
+			if f, err := strconv.ParseFloat(val, 64); err == nil {
+				co.TopP = &f
+			}
+		}
 	}
+
 	if v, ok := opts["max_tokens"]; ok {
-		n, _ := strconv.Atoi(v)
-		co.MaxTokens = &n
+		switch val := v.(type) {
+		case int64:
+			n := int(val)
+			co.MaxTokens = &n
+		case float64:
+			n := int(val)
+			co.MaxTokens = &n
+		case string:
+			if n, err := strconv.Atoi(val); err == nil {
+				co.MaxTokens = &n
+			}
+		}
 	}
+
 	if v, ok := opts["stop"]; ok {
-		co.Stop = strings.Split(v, ",")
+		switch val := v.(type) {
+		case string:
+			co.Stop = strings.Split(val, ",")
+		case []string:
+			co.Stop = val
+		case []any:
+			for _, s := range val {
+				if str, ok := s.(string); ok {
+					co.Stop = append(co.Stop, str)
+				}
+			}
+		}
 	}
 	return co
 }
@@ -285,8 +317,6 @@ func mergeStop(stopField any, stopSequences []string) []string {
 
 var webSearchSchema = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Search query"}},"required":["query"]}`)
 
-// normalizeSearchTool converts special search tools (WebSearch, web_search_20250305, etc.)
-// into a standard function tool that the search wrapper can intercept.
 func normalizeSearchTool(def message.ToolDefinition) (message.ToolDefinition, bool) {
 	switch {
 	case def.Name == "WebSearch",

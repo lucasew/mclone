@@ -150,7 +150,7 @@ func extractText(n *html.Node) string {
 }
 
 func init() {
-	remote.RegisterSearcher("ddg", func(name string, options map[string]string) (remote.Searcher, error) {
+	remote.RegisterSearcher("ddg", func(name string, options map[string]any) (remote.Searcher, error) {
 		return &DDGSearcher{}, nil
 	})
 }

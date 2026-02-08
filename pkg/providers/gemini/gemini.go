@@ -24,6 +24,10 @@ type GeminiProvider struct {
 	ClientFactory ClientFactory
 }
 
+type GeminiConfig struct {
+	APIKey string `mapstructure:"api_key"`
+}
+
 func (p *GeminiProvider) Name() string { return "gemini" }
 
 func (p *GeminiProvider) List(ctx context.Context) ([]remote.Model, error) {
@@ -479,7 +483,11 @@ func CleanSchema(m map[string]interface{}) {
 }
 
 func init() {
-	remote.Register("gemini", func(name string, options map[string]string, _ remote.Resolver) (remote.Provider, error) {
-		return &GeminiProvider{APIKey: options["api_key"]}, nil
+	remote.Register("gemini", func(name string, options map[string]any, _ remote.Resolver) (remote.Provider, error) {
+		var cfg GeminiConfig
+		if err := remote.DecodeOptions(options, &cfg); err != nil {
+			return nil, err
+		}
+		return &GeminiProvider{APIKey: cfg.APIKey}, nil
 	})
 }

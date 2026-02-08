@@ -20,6 +20,10 @@ type OllamaProvider struct {
 	BaseURL string
 }
 
+type OllamaConfig struct {
+	BaseURL string `mapstructure:"base_url"`
+}
+
 func (p *OllamaProvider) Name() string { return "ollama" }
 
 func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
@@ -56,7 +60,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []
 	)
 
 	params := sdk.ChatCompletionNewParams{
-		Model:    sdk.ChatModel(modelName),
+		Model:    modelName, // string
 		Messages: toSDKMessages(messages),
 	}
 
@@ -93,7 +97,6 @@ func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []
 		defer stream.Close()
 
 		startTime := time.Now()
-		var hasSentContent bool
 
 		acc := &sdk.ChatCompletionAccumulator{}
 
@@ -103,10 +106,6 @@ func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []
 
 			for _, choice := range chunk.Choices {
 				if choice.Delta.Content != "" {
-					if !hasSentContent {
-						slog.Debug("ollama_first_token", "latency", time.Since(startTime).String())
-						hasSentContent = true
-					}
 					out <- message.ChatResponse{Content: choice.Delta.Content}
 				}
 			}
@@ -139,19 +138,25 @@ func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamU
 	for _, m := range messages {
 		switch m.Role {
 		case message.RoleSystem:
+			var text string
 			for _, p := range m.Parts {
 				if tp, ok := p.(message.TextPart); ok {
-					out = append(out, sdk.SystemMessage(tp.Text))
+					text += tp.Text
 				}
 			}
+			out = append(out, sdk.SystemMessage(text))
 		case message.RoleUser:
+			var text string
 			for _, p := range m.Parts {
 				switch v := p.(type) {
 				case message.TextPart:
-					out = append(out, sdk.UserMessage(v.Text))
+					text += v.Text
 				case message.ToolResultPart:
 					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
 				}
+			}
+			if text != "" {
+				out = append(out, sdk.UserMessage(text))
 			}
 		case message.RoleAssistant:
 			var textContent string
@@ -163,7 +168,6 @@ func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamU
 				case message.ToolCallPart:
 					toolCalls = append(toolCalls, sdk.ChatCompletionMessageToolCallParam{
 						ID:   v.ID,
-						Type: "function",
 						Function: sdk.ChatCompletionMessageToolCallFunctionParam{
 							Name:      v.Name,
 							Arguments: string(v.Arguments),
@@ -171,17 +175,18 @@ func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamU
 					})
 				}
 			}
-			msg := sdk.ChatCompletionMessageParamUnion{
-				OfAssistant: &sdk.ChatCompletionAssistantMessageParam{
-					Content: sdk.ChatCompletionAssistantMessageParamContentUnion{
-						OfString: sdk.String(textContent),
-					},
-				},
-			}
 			if len(toolCalls) > 0 {
-				msg.OfAssistant.ToolCalls = toolCalls
+				out = append(out, sdk.ChatCompletionMessageParamUnion{
+					OfAssistant: &sdk.ChatCompletionAssistantMessageParam{
+						Content: sdk.ChatCompletionAssistantMessageParamContentUnion{
+							OfString: sdk.String(textContent),
+						},
+						ToolCalls: toolCalls,
+					},
+				})
+			} else {
+				out = append(out, sdk.AssistantMessage(textContent))
 			}
-			out = append(out, msg)
 		case message.RoleTool:
 			for _, p := range m.Parts {
 				if v, ok := p.(message.ToolResultPart); ok {
@@ -197,18 +202,16 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
 	var out []sdk.ChatCompletionToolParam
 	for _, t := range tools {
 		if t.Type != "" && t.Type != "function" {
-			slog.Debug("ollama_skip_tool", "name", t.Name, "type", t.Type)
 			continue
 		}
 		var params shared.FunctionParameters
 		json.Unmarshal(t.Parameters, &params)
 
 		out = append(out, sdk.ChatCompletionToolParam{
-			Type: "function",
 			Function: shared.FunctionDefinitionParam{
-				Name:        t.Name,
-				Description: sdk.String(t.Description),
-				Parameters:  params,
+				Name:        t.Name, // string
+				Description: sdk.String(t.Description), // param.Opt[string]
+				Parameters:  params, // shared.FunctionParameters
 			},
 		})
 	}
@@ -216,8 +219,12 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
 }
 
 func init() {
-	remote.Register("ollama", func(name string, options map[string]string, _ remote.Resolver) (remote.Provider, error) {
-		baseURL := options["base_url"]
+	remote.Register("ollama", func(name string, options map[string]any, _ remote.Resolver) (remote.Provider, error) {
+		var cfg OllamaConfig
+		if err := remote.DecodeOptions(options, &cfg); err != nil {
+			return nil, err
+		}
+		baseURL := cfg.BaseURL
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"
 		}
