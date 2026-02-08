@@ -113,11 +113,13 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 		}
 
 		// Cloud Code API expects a wrapped body: { model: "...", request: { ... } }
-		// Note: "project" field is optional or inferred from token? request.ts uses it if available.
-		// We'll omit "project" for now and hope it defaults correctly.
 		wrappedBody := map[string]interface{}{
 			"model":   modelName,
 			"request": reqPayload,
+		}
+		// Inject project ID if available
+		if p.token.ProjectID != "" {
+			wrappedBody["project"] = p.token.ProjectID
 		}
 
 		bodyBytes, err := json.Marshal(wrappedBody)
@@ -235,6 +237,7 @@ type TokenData struct {
 	ExpiresIn    int       `json:"expires_in"` // seconds
 	ExpiresAt    time.Time `json:"expires_at"`
 	TokenType    string    `json:"token_type"`
+	ProjectID    string    `json:"project_id,omitempty"` // Derived from Cloud Code onboarding
 }
 
 func (p *GeminiOAuthProvider) ensureToken(ctx context.Context) error {
@@ -274,9 +277,119 @@ func (p *GeminiOAuthProvider) ensureToken(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Ensure we have a project ID (onboard to free tier if needed)
+	if newToken.ProjectID == "" {
+		pid, err := p.onboardManagedProject(ctx, newToken.AccessToken)
+		if err != nil {
+			slog.Warn("gemini_onboard_failed", "error", err)
+			// Continue anyway? API might fail later.
+		} else {
+			newToken.ProjectID = pid
+		}
+	}
+
 	p.saveToken(newToken)
 	p.base.APIKey = newToken.AccessToken
 	return nil
+}
+
+func (p *GeminiOAuthProvider) onboardManagedProject(ctx context.Context, accessToken string) (string, error) {
+	// Mimic plugin's onboardManagedProject with tierId="free-tier"
+	url := "https://cloudcode-pa.googleapis.com/v1internal:onboardUser"
+
+	metadata := map[string]string{
+		"ideType":    "IDE_UNSPECIFIED",
+		"platform":   "PLATFORM_UNSPECIFIED",
+		"pluginType": "GEMINI",
+	}
+
+	bodyData := map[string]interface{}{
+		"tierId":   "free-tier",
+		"metadata": metadata,
+	}
+
+	bodyBytes, _ := json.Marshal(bodyData)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
+	req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
+	req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("onboard error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var payload struct {
+		Name     string `json:"name"` // Operation name
+		Done     bool   `json:"done"`
+		Response struct {
+			CloudAICompanionProject struct {
+				ID string `json:"id"`
+			} `json:"cloudaicompanionProject"`
+		} `json:"response"`
+	}
+
+	if err := json.Unmarshal(respBody, &payload); err != nil {
+		return "", err
+	}
+
+	if payload.Done {
+		return payload.Response.CloudAICompanionProject.ID, nil
+	}
+
+	// If not done, poll the operation
+	if payload.Name == "" {
+		return "", fmt.Errorf("onboard incomplete and no operation name returned")
+	}
+
+	opName := payload.Name
+	// Poll for up to 60 seconds
+	for i := 0; i < 12; i++ {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+
+		opUrl := "https://cloudcode-pa.googleapis.com/v1internal/" + opName
+		reqOp, _ := http.NewRequestWithContext(ctx, "GET", opUrl, nil)
+		reqOp.Header = req.Header
+
+		respOp, err := http.DefaultClient.Do(reqOp)
+		if err != nil {
+			continue
+		}
+
+		bodyOp, _ := io.ReadAll(respOp.Body)
+		respOp.Body.Close()
+
+		if respOp.StatusCode != 200 {
+			continue
+		}
+
+		if err := json.Unmarshal(bodyOp, &payload); err != nil {
+			continue
+		}
+
+		if payload.Done {
+			return payload.Response.CloudAICompanionProject.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("onboard timed out")
 }
 
 func (p *GeminiOAuthProvider) loadToken() (*TokenData, error) {

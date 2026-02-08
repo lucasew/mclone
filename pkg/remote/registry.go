@@ -2,6 +2,7 @@ package remote
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -84,6 +85,8 @@ func NewResolver(conf *config.Config) Resolver {
 		if !ok {
 			return fmt.Errorf("remote %q not found during update", remoteName)
 		}
+
+		slog.Info("updating_options", "remote", remoteName, "keys", len(options))
 
 		// Merge options
 		if rc.Options == nil {
