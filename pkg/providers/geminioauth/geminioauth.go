@@ -82,7 +82,29 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 	go func() {
 		defer close(out)
 
-		contents, sys := gemini.ToGeminiContents(messages)
+		// Patch messages to include dummy thought signature for Gemini 3 models
+		// to avoid ToGeminiContents dropping them (mimicking plugin behavior).
+		patchedMessages := make([]message.Message, len(messages))
+		for i, m := range messages {
+			var newParts []message.Part
+			for _, p := range m.Parts {
+				if tc, ok := p.(message.ToolCallPart); ok {
+					if len(tc.ThoughtSignature) == 0 {
+						tc.ThoughtSignature = []byte("skip_thought_signature_validator")
+					}
+					// Also ensure new parts are created with this signature
+					newParts = append(newParts, tc)
+				} else {
+					newParts = append(newParts, p)
+				}
+			}
+			// Copy structure but replace parts
+			newMsg := m
+			newMsg.Parts = newParts
+			patchedMessages[i] = newMsg
+		}
+
+		contents, sys := gemini.ToGeminiContents(patchedMessages)
 
 		genConfig := map[string]interface{}{}
 		if options.Temperature != nil {
@@ -120,6 +142,9 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 		// Inject project ID if available
 		if p.token.ProjectID != "" {
 			wrappedBody["project"] = p.token.ProjectID
+			slog.Info("gemini_oauth_chat_project", "project_id", p.token.ProjectID)
+		} else {
+			slog.Warn("gemini_oauth_chat_no_project", "msg", "Project ID missing, request might fail")
 		}
 
 		bodyBytes, err := json.Marshal(wrappedBody)
