@@ -1,6 +1,8 @@
 package geminioauth
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,12 +16,12 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/providers/gemini"
 	"github.com/lucasew/mclone/pkg/remote"
-	"google.golang.org/genai"
 )
 
 const (
@@ -44,57 +46,185 @@ type GeminiOAuthProvider struct {
 	options  map[string]string
 	resolver remote.Resolver
 	token    *TokenData
+	loginMu  sync.Mutex
 }
 
 func (p *GeminiOAuthProvider) Name() string { return "geminioauth" }
 
 func (p *GeminiOAuthProvider) List(ctx context.Context) ([]remote.Model, error) {
-	// ensureToken is called inside the client factory, but List calls client(), so it's covered.
-	return p.base.List(ctx)
-}
-
-func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	return p.base.Chat(ctx, modelName, messages, options)
-}
-
-// clientFactory injects the OAuth token
-func (p *GeminiOAuthProvider) clientFactory(ctx context.Context) (*genai.Client, error) {
+	// Trigger authentication flow if needed
 	if err := p.ensureToken(ctx); err != nil {
 		return nil, err
 	}
 
-	// p.base.APIKey holds the Access Token now (set by ensureToken)
-	accessToken := p.base.APIKey
-
-	transport := &oauthTransport{
-		accessToken: accessToken,
-		base:        http.DefaultTransport,
-	}
-
-	httpClient := &http.Client{
-		Transport: transport,
-	}
-
-	return genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:     "", // Intentionally empty to rely on Authorization header
-		Backend:    genai.BackendGeminiAPI,
-		HTTPClient: httpClient,
-	})
+	// We cannot use the public Gemini API ListModels endpoint due to insufficient scopes
+	// (Cloud Code token only has cloud-platform scope, not generativelanguage scope).
+	// We return a static list of models known to be supported by Cloud Code.
+	return []remote.Model{
+		{Name: "Gemini 2.0 Flash", Slug: "gemini-2.0-flash"},
+		{Name: "Gemini 1.5 Pro", Slug: "gemini-1.5-pro"},
+		{Name: "Gemini 1.5 Flash", Slug: "gemini-1.5-flash"},
+		{Name: "Gemini 1.0 Pro", Slug: "gemini-1.0-pro"},
+	}, nil
 }
 
-type oauthTransport struct {
-	accessToken string
-	base        http.RoundTripper
-}
+func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
+	if err := p.ensureToken(ctx); err != nil {
+		out := make(chan message.ChatResponse)
+		go func() {
+			out <- message.ChatResponse{Error: err}
+			close(out)
+		}()
+		return out, nil
+	}
 
-func (t *oauthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	newReq := req.Clone(req.Context())
-	newReq.Header.Set("Authorization", "Bearer "+t.accessToken)
-	// Ensure no API key query param interferes
-	q := newReq.URL.Query()
-	q.Del("key")
-	newReq.URL.RawQuery = q.Encode()
-	return t.base.RoundTrip(newReq)
+	out := make(chan message.ChatResponse)
+	go func() {
+		defer close(out)
+
+		contents, sys := gemini.ToGeminiContents(messages)
+
+		genConfig := map[string]interface{}{}
+		if options.Temperature != nil {
+			genConfig["temperature"] = *options.Temperature
+		}
+		if options.MaxTokens != nil {
+			genConfig["maxOutputTokens"] = *options.MaxTokens
+		}
+		if options.TopP != nil {
+			genConfig["topP"] = *options.TopP
+		}
+		if len(options.Stop) > 0 {
+			genConfig["stopSequences"] = options.Stop
+		}
+		if options.JSONMode {
+			genConfig["responseMimeType"] = "application/json"
+		}
+
+		reqPayload := map[string]interface{}{
+			"contents":         contents,
+			"generationConfig": genConfig,
+		}
+		if sys != nil {
+			reqPayload["systemInstruction"] = sys
+		}
+		if len(options.Tools) > 0 {
+			reqPayload["tools"] = gemini.ToGeminiTools(options.Tools)
+		}
+
+		// Cloud Code API expects a wrapped body: { model: "...", request: { ... } }
+		// Note: "project" field is optional or inferred from token? request.ts uses it if available.
+		// We'll omit "project" for now and hope it defaults correctly.
+		wrappedBody := map[string]interface{}{
+			"model":   modelName,
+			"request": reqPayload,
+		}
+
+		bodyBytes, err := json.Marshal(wrappedBody)
+		if err != nil {
+			out <- message.ChatResponse{Error: fmt.Errorf("failed to marshal request: %w", err)}
+			return
+		}
+
+		// URL for streaming: v1internal:streamGenerateContent?alt=sse
+		url := "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
+
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			out <- message.ChatResponse{Error: err}
+			return
+		}
+
+		req.Header.Set("Authorization", "Bearer "+p.token.AccessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
+		req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
+		req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			out <- message.ChatResponse{Error: err}
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			out <- message.ChatResponse{Error: fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))}
+			return
+		}
+
+		// Parse SSE stream
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					out <- message.ChatResponse{Error: err}
+				}
+				break
+			}
+
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+
+			dataStr := strings.TrimPrefix(line, "data: ")
+			if dataStr == "[DONE]" {
+				break
+			}
+
+			var sseResp struct {
+				Response struct {
+					Candidates []struct {
+						Content struct {
+							Parts []struct {
+								Text string `json:"text"`
+							} `json:"parts"`
+						} `json:"content"`
+					} `json:"candidates"`
+				} `json:"response"`
+			}
+
+			// Cloud Code SSE payloads might be wrapped or just standard.
+			// request.ts transformStreamingLine tries to unwrap `{ response: ... }`.
+			if err := json.Unmarshal([]byte(dataStr), &sseResp); err == nil && len(sseResp.Response.Candidates) > 0 {
+				// We found a wrapped response
+				for _, cand := range sseResp.Response.Candidates {
+					for _, part := range cand.Content.Parts {
+						if part.Text != "" {
+							out <- message.ChatResponse{Content: part.Text}
+						}
+					}
+				}
+				continue
+			}
+
+			// Try unwrapped (standard Gemini format)
+			var standardResp struct {
+				Candidates []struct {
+					Content struct {
+						Parts []struct {
+							Text string `json:"text"`
+						} `json:"parts"`
+					} `json:"content"`
+				} `json:"candidates"`
+			}
+			if err := json.Unmarshal([]byte(dataStr), &standardResp); err == nil && len(standardResp.Candidates) > 0 {
+				for _, cand := range standardResp.Candidates {
+					for _, part := range cand.Content.Parts {
+						if part.Text != "" {
+							out <- message.ChatResponse{Content: part.Text}
+						}
+					}
+				}
+			}
+		}
+
+		out <- message.ChatResponse{Done: true}
+	}()
+	return out, nil
 }
 
 // Token management
@@ -108,23 +238,34 @@ type TokenData struct {
 }
 
 func (p *GeminiOAuthProvider) ensureToken(ctx context.Context) error {
+	// 1. Fast path: check if valid token exists in memory
 	token, err := p.loadToken()
-	if err == nil && token != nil {
-		if time.Now().Add(time.Minute).Before(token.ExpiresAt) {
-			p.base.APIKey = token.AccessToken
+	if err == nil && token != nil && time.Now().Add(time.Minute).Before(token.ExpiresAt) {
+		p.base.APIKey = token.AccessToken
+		return nil
+	}
+
+	// 2. Slow path: Refresh or Login (protected by Mutex)
+	p.loginMu.Lock()
+	defer p.loginMu.Unlock()
+
+	// Re-check after acquiring lock
+	token, err = p.loadToken()
+	if err == nil && token != nil && time.Now().Add(time.Minute).Before(token.ExpiresAt) {
+		p.base.APIKey = token.AccessToken
+		return nil
+	}
+
+	// Try refresh
+	if token != nil && token.RefreshToken != "" {
+		slog.Info("gemini_oauth_refreshing_token")
+		newToken, err := p.refreshToken(token.RefreshToken)
+		if err == nil {
+			p.saveToken(newToken)
+			p.base.APIKey = newToken.AccessToken
 			return nil
 		}
-		// Refresh
-		if token.RefreshToken != "" {
-			slog.Info("gemini_oauth_refreshing_token")
-			newToken, err := p.refreshToken(token.RefreshToken)
-			if err == nil {
-				p.saveToken(newToken)
-				p.base.APIKey = newToken.AccessToken
-				return nil
-			}
-			slog.Warn("gemini_oauth_refresh_failed", "error", err)
-		}
+		slog.Warn("gemini_oauth_refresh_failed", "error", err)
 	}
 
 	// Login
@@ -232,8 +373,8 @@ func (p *GeminiOAuthProvider) performLoginFlow(ctx context.Context) (*TokenData,
 	codeCh := make(chan string)
 	errCh := make(chan error)
 
-	srv := &http.Server{Addr: ":" + redirectPort}
-	http.HandleFunc(redirectPath, func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(redirectPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("state") != state {
 			http.Error(w, "Invalid state", http.StatusBadRequest)
@@ -249,6 +390,8 @@ func (p *GeminiOAuthProvider) performLoginFlow(ctx context.Context) (*TokenData,
 		w.Write([]byte("Login successful! You can close this window."))
 		codeCh <- code
 	})
+
+	srv := &http.Server{Addr: ":" + redirectPort, Handler: mux}
 
 	go func() {
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
@@ -363,8 +506,7 @@ func init() {
 
 		// Initialize base provider with our factory
 		base := &gemini.GeminiProvider{
-			APIKey:        "",
-			ClientFactory: prov.clientFactory,
+			APIKey: "",
 		}
 		prov.base = base
 
