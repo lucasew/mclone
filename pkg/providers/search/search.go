@@ -5,7 +5,6 @@ import (
 	json "github.com/goccy/go-json"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/message"
@@ -19,6 +18,13 @@ type SearchWrapperProvider struct {
 	searcher   remote.Searcher
 	maxResults int
 	maxLoops   int
+}
+
+type SearchConfig struct {
+	Provider   string `mapstructure:"provider"`
+	Search     string `mapstructure:"search"`
+	MaxResults int    `mapstructure:"max_results"`
+	MaxLoops   int    `mapstructure:"max_loops"`
 }
 
 func (p *SearchWrapperProvider) Name() string { return "search" }
@@ -52,7 +58,14 @@ func (p *SearchWrapperProvider) Chat(ctx context.Context, modelName string, mess
 		currentMsgs := make([]message.Message, len(messages))
 		copy(currentMsgs, messages)
 
-		for loop := 0; loop < p.maxLoops; loop++ {
+		loop := 0
+		for {
+			if loop >= p.maxLoops {
+				slog.Warn("search_max_loops", "max", p.maxLoops)
+				out <- message.ChatResponse{Done: true}
+				return
+			}
+
 			ch, err := p.base.Chat(ctx, modelName, currentMsgs, options)
 			if err != nil {
 				out <- message.ChatResponse{Error: err}
@@ -143,11 +156,8 @@ func (p *SearchWrapperProvider) Chat(ctx context.Context, modelName string, mess
 
 			// Next loop: re-call provider with expanded history
 			slog.Info("search_requery", "loop", loop+1, "search_calls", len(searchCalls))
+			loop++
 		}
-
-		// Max loops reached
-		slog.Warn("search_max_loops", "max", p.maxLoops)
-		out <- message.ChatResponse{Done: true}
 	}()
 	return out, nil
 }
@@ -164,45 +174,40 @@ func formatResults(results []remote.SearchResult) string {
 }
 
 func init() {
-	remote.Register("search", func(name string, options map[string]string, resolve remote.Resolver) (remote.Provider, error) {
-		providerName := options["provider"]
-		if providerName == "" {
+	remote.Register("search", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
+		var cfg SearchConfig
+		if err := remote.DecodeOptions(options, &cfg); err != nil {
+			return nil, err
+		}
+
+		if cfg.Provider == "" {
 			return nil, fmt.Errorf("search wrapper requires 'provider' option")
 		}
-		searchName := options["search"]
-		if searchName == "" {
-			searchName = "ddg"
+		if cfg.Search == "" {
+			cfg.Search = "ddg"
+		}
+		if cfg.MaxResults == 0 {
+			cfg.MaxResults = 5
+		}
+		if cfg.MaxLoops == 0 {
+			cfg.MaxLoops = 3
 		}
 
-		base, err := resolve.Provider(providerName)
+		base, err := resolve.Provider(cfg.Provider)
 		if err != nil {
-			return nil, fmt.Errorf("search wrapper: failed to resolve provider %q: %w", providerName, err)
+			return nil, fmt.Errorf("search wrapper: failed to resolve provider %q: %w", cfg.Provider, err)
 		}
 
-		searcher, err := resolve.Searcher(searchName)
+		searcher, err := resolve.Searcher(cfg.Search)
 		if err != nil {
-			return nil, fmt.Errorf("search wrapper: failed to resolve searcher %q: %w", searchName, err)
-		}
-
-		maxResults := 5
-		if v, ok := options["max_results"]; ok {
-			if n, err := strconv.Atoi(v); err == nil {
-				maxResults = n
-			}
-		}
-
-		maxLoops := 3
-		if v, ok := options["max_loops"]; ok {
-			if n, err := strconv.Atoi(v); err == nil {
-				maxLoops = n
-			}
+			return nil, fmt.Errorf("search wrapper: failed to resolve searcher %q: %w", cfg.Search, err)
 		}
 
 		return &SearchWrapperProvider{
 			base:       base,
 			searcher:   searcher,
-			maxResults: maxResults,
-			maxLoops:   maxLoops,
+			maxResults: cfg.MaxResults,
+			maxLoops:   cfg.MaxLoops,
 		}, nil
 	})
 }

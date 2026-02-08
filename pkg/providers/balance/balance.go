@@ -69,7 +69,12 @@ func (p *BalanceProvider) Chat(ctx context.Context, modelName string, messages [
 	slog.Info("balance_system_prompt_hash", "hash", affinityKey)
 	b := p.pickBackend(affinityKey)
 	if b == nil {
-		return nil, fmt.Errorf("all backends unavailable")
+		out := make(chan message.ChatResponse)
+		go func() {
+			out <- message.ChatResponse{Error: fmt.Errorf("all backends unavailable")}
+			close(out)
+		}()
+		return out, nil
 	}
 
 	slog.Info("balance_routing", "backend", b.name, "model", modelName, "affinity", affinityKey[:8])
@@ -112,6 +117,8 @@ func (p *BalanceProvider) pickBackend(affinityKey string) *backend {
 			return b
 		}
 	}
+	// All backends busy/cooling down. Pick the one with shortest wait?
+	// For now return nil, trigger failover logic (which also checks availability)
 	return nil
 }
 
@@ -128,7 +135,7 @@ func (p *BalanceProvider) wrapChannel(ctx context.Context, ch <-chan message.Cha
 		for resp := range ch {
 			if resp.Error != nil && !gotContent {
 				slog.Warn("balance_stream_error", "backend", b.name, "error", resp.Error)
-				// TODO: parse retry_after from error and call b.markUnavailable
+				b.markUnavailable(30 * time.Second) // Default cooldown on error
 				failCh, err := p.failoverFrom(ctx, b, modelName, messages, options, affinityKey)
 				if err != nil {
 					out <- message.ChatResponse{Error: err}
@@ -157,8 +164,15 @@ func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, mod
 		}
 	}
 
-	for i := startIdx; i < len(p.backends); i++ {
-		b := p.backends[i]
+	// Try round-robin from failed backend onwards
+	count := len(p.backends)
+	for i := 0; i < count; i++ {
+		idx := (startIdx + i) % count
+		b := p.backends[idx]
+		if b == failed {
+			continue
+		}
+
 		wait := time.Until(b.getAvailableAt())
 		if wait > b.failoverThreshold {
 			continue
@@ -175,7 +189,7 @@ func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, mod
 			continue
 		}
 
-		p.affinity.Store(affinityKey, i)
+		p.affinity.Store(affinityKey, idx)
 		return ch, nil
 	}
 	return nil, fmt.Errorf("all backends exhausted")
@@ -207,18 +221,28 @@ func parseThreshold(s string, fallback time.Duration) time.Duration {
 	return d
 }
 
+func getString(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
+}
+
 func init() {
-	remote.Register("balance", func(name string, options map[string]string, resolve remote.Resolver) (remote.Provider, error) {
+	remote.Register("balance", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
 		if resolve.Provider == nil {
 			return nil, fmt.Errorf("balance provider requires a resolver")
 		}
 
-		remoteList := options["remotes"]
+		remoteList := getString(options, "remotes")
 		if remoteList == "" {
 			return nil, fmt.Errorf("balance provider requires 'remotes' option (comma-separated)")
 		}
 
-		groupThreshold := parseThreshold(options["failover_threshold"], defaultFailoverThreshold)
+		groupThreshold := parseThreshold(getString(options, "failover_threshold"), defaultFailoverThreshold)
 
 		names := strings.Split(remoteList, ",")
 		backends := make([]*backend, 0, len(names))
@@ -230,7 +254,7 @@ func init() {
 			}
 
 			// Per-backend threshold: specific > group > default
-			threshold := parseThreshold(options["failover_threshold:"+rn], groupThreshold)
+			threshold := parseThreshold(getString(options, "failover_threshold:"+rn), groupThreshold)
 
 			backends = append(backends, &backend{
 				provider:          prov,

@@ -18,7 +18,7 @@ type Searcher interface {
 }
 
 // SearchFactory creates a Searcher from config options.
-type SearchFactory func(name string, options map[string]string) (Searcher, error)
+type SearchFactory func(name string, options map[string]any) (Searcher, error)
 
 var searchRegistry = make(map[string]SearchFactory)
 
@@ -28,7 +28,7 @@ func RegisterSearcher(typeName string, factory SearchFactory) {
 }
 
 // NewSearcher creates a Searcher by type name.
-func NewSearcher(typeName, name string, options map[string]string) (Searcher, error) {
+func NewSearcher(typeName, name string, options map[string]any) (Searcher, error) {
 	factory, ok := searchRegistry[typeName]
 	if !ok {
 		return nil, fmt.Errorf("unknown search type: %s", typeName)

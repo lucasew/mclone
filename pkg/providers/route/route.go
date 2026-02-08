@@ -12,7 +12,7 @@ import (
 
 type modelRoute struct {
 	provider  remote.Provider
-	modelName string // empty = keep original model name
+	modelName string
 }
 
 type RouteProvider struct {
@@ -36,6 +36,8 @@ func (p *RouteProvider) List(ctx context.Context) ([]remote.Model, error) {
 func (p *RouteProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
 	r, ok := p.routes[modelName]
 	if !ok {
+		// If exact match not found, maybe try "default" route?
+		// For now, fail.
 		return nil, fmt.Errorf("model %q not configured in route", modelName)
 	}
 
@@ -43,19 +45,51 @@ func (p *RouteProvider) Chat(ctx context.Context, modelName string, messages []m
 	if r.modelName != "" {
 		actualModel = r.modelName
 	}
+	// If the route was just "provider", modelName stays "modelName"
+	// If the route was "provider:model", modelName becomes "model"
+
+	// Wait, the logic below:
+	// target := "remoteName:backendModel"
+	// remoteName := parts[0]
+	// backendModel := parts[1] (optional)
+
+	// If backendModel is "", it means we forward the modelName as is?
+	// The original code:
+	/*
+		if r.modelName != "" {
+			actualModel = r.modelName
+		}
+	*/
+	// This means if I map "gpt4" -> "openai", r.modelName is empty.
+	// So actualModel is "gpt4".
+	// But "openai" provider expects "gpt-4" or whatever.
+	// So usually "gpt4" -> "openai:gpt-4".
+
+	// Wait, if I have:
+	// [remotes.myroute]
+	// type = "route"
+	// [remotes.myroute.options]
+	// "gpt-4" = "openai:gpt-4"
+	// "claude" = "anthropic:claude-3-opus-20240229"
 
 	slog.Info("route_dispatch", "requested", modelName, "actual", actualModel, "provider", r.provider.Name())
 	return r.provider.Chat(ctx, actualModel, messages, options)
 }
 
 func init() {
-	remote.Register("route", func(name string, options map[string]string, resolve remote.Resolver) (remote.Provider, error) {
+	remote.Register("route", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
 		if resolve.Provider == nil {
 			return nil, fmt.Errorf("route provider requires a resolver")
 		}
 
 		routes := make(map[string]modelRoute)
-		for model, target := range options {
+		for model, val := range options {
+			target, ok := val.(string)
+			if !ok {
+				slog.Warn("route_invalid_option", "key", model, "value", val, "expected", "string")
+				continue
+			}
+
 			parts := strings.SplitN(target, ":", 2)
 			remoteName := parts[0]
 

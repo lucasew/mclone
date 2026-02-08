@@ -21,6 +21,14 @@ var configCmd = &cobra.Command{
 	},
 }
 
+func toAnyMap(m map[string]string) map[string]any {
+	out := make(map[string]any)
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 func interactiveConfig() {
 	reader := bufio.NewReader(os.Stdin)
 	for {
@@ -50,8 +58,23 @@ func interactiveConfig() {
 		choice, _ := reader.ReadString('\n')
 		choice = strings.TrimSpace(choice)
 
-		switch choice {
-		case "n":
+		if choice == "d" {
+			fmt.Print("Enter name of remote to delete: ")
+			name, _ := reader.ReadString('\n')
+			name = strings.TrimSpace(name)
+			if _, ok := conf.Remotes[name]; ok {
+				delete(conf.Remotes, name)
+				conf.Save()
+				fmt.Printf("Remote %q deleted.\n", name)
+			} else {
+				fmt.Println("Remote not found")
+			}
+			continue
+		} else if choice == "q" {
+			return
+		}
+
+		if choice == "n" {
 			fmt.Print("Enter name for new remote: ")
 			name, _ := reader.ReadString('\n')
 			name = strings.TrimSpace(name)
@@ -150,7 +173,7 @@ func interactiveConfig() {
 
 			conf.Remotes[name] = config.RemoteConfig{
 				Type:    selectedType,
-				Options: options,
+				Options: toAnyMap(options),
 			}
 			conf.Save()
 			fmt.Printf("Remote %q added.\n", name)
@@ -180,20 +203,6 @@ func interactiveConfig() {
 					}
 				}
 			}
-
-		case "d":
-			fmt.Print("Enter name of remote to delete: ")
-			name, _ := reader.ReadString('\n')
-			name = strings.TrimSpace(name)
-			if _, ok := conf.Remotes[name]; ok {
-				delete(conf.Remotes, name)
-				conf.Save()
-				fmt.Printf("Remote %q deleted.\n", name)
-			} else {
-				fmt.Println("Remote not found")
-			}
-		case "q":
-			return
 		}
 	}
 }
@@ -216,7 +225,7 @@ var configAddCmd = &cobra.Command{
 
 		rc := config.RemoteConfig{
 			Type:    typeName,
-			Options: options,
+			Options: toAnyMap(options),
 		}
 
 		conf.Remotes[name] = rc
