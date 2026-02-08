@@ -264,47 +264,54 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 				break
 			}
 
+			// SSE Response Struct (supporting both wrapped and unwrapped, and function calls)
+			type CandidatePart struct {
+				Text         string `json:"text,omitempty"`
+				FunctionCall *struct {
+					Name string                 `json:"name"`
+					Args map[string]interface{} `json:"args"`
+				} `json:"functionCall,omitempty"`
+			}
+
+			type Candidate struct {
+				Content struct {
+					Parts []CandidatePart `json:"parts"`
+				} `json:"content"`
+			}
+
 			var sseResp struct {
 				Response struct {
-					Candidates []struct {
-						Content struct {
-							Parts []struct {
-								Text string `json:"text"`
-							} `json:"parts"`
-						} `json:"content"`
-					} `json:"candidates"`
+					Candidates []Candidate `json:"candidates"`
 				} `json:"response"`
 			}
 
-			// Cloud Code SSE payloads might be wrapped or just standard.
-			// request.ts transformStreamingLine tries to unwrap `{ response: ... }`.
-			if err := json.Unmarshal([]byte(dataStr), &sseResp); err == nil && len(sseResp.Response.Candidates) > 0 {
-				// We found a wrapped response
-				for _, cand := range sseResp.Response.Candidates {
-					for _, part := range cand.Content.Parts {
-						if part.Text != "" {
-							out <- message.ChatResponse{Content: part.Text}
-						}
-					}
-				}
-				continue
+			var standardResp struct {
+				Candidates []Candidate `json:"candidates"`
 			}
 
-			// Try unwrapped (standard Gemini format)
-			var standardResp struct {
-				Candidates []struct {
-					Content struct {
-						Parts []struct {
-							Text string `json:"text"`
-						} `json:"parts"`
-					} `json:"content"`
-				} `json:"candidates"`
+			var candidates []Candidate
+
+			// Cloud Code SSE payloads might be wrapped or just standard.
+			if err := json.Unmarshal([]byte(dataStr), &sseResp); err == nil && len(sseResp.Response.Candidates) > 0 {
+				candidates = sseResp.Response.Candidates
+			} else if err := json.Unmarshal([]byte(dataStr), &standardResp); err == nil && len(standardResp.Candidates) > 0 {
+				candidates = standardResp.Candidates
 			}
-			if err := json.Unmarshal([]byte(dataStr), &standardResp); err == nil && len(standardResp.Candidates) > 0 {
-				for _, cand := range standardResp.Candidates {
-					for _, part := range cand.Content.Parts {
-						if part.Text != "" {
-							out <- message.ChatResponse{Content: part.Text}
+
+			for _, cand := range candidates {
+				for _, part := range cand.Content.Parts {
+					if part.Text != "" {
+						out <- message.ChatResponse{Content: part.Text}
+					}
+					if part.FunctionCall != nil {
+						// Convert args to JSON bytes for ToolCall
+						argsBytes, _ := json.Marshal(part.FunctionCall.Args)
+						out <- message.ChatResponse{
+							ToolCalls: []message.ToolCall{{
+								ID:        "call_" + generateRandomString(8), // Gemini doesn't always send ID in stream?
+								Name:      part.FunctionCall.Name,
+								Arguments: json.RawMessage(argsBytes),
+							}},
 						}
 					}
 				}
