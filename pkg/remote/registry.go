@@ -12,8 +12,9 @@ type Factory func(name string, options map[string]string, resolve Resolver) (Pro
 
 // Resolver provides access to both provider and searcher resolution.
 type Resolver struct {
-	Provider func(remoteName string) (Provider, error)
-	Searcher func(remoteName string) (Searcher, error)
+	Provider      func(remoteName string) (Provider, error)
+	Searcher      func(remoteName string) (Searcher, error)
+	UpdateOptions func(remoteName string, options map[string]string) error
 }
 
 var registry = make(map[string]Factory)
@@ -71,6 +72,30 @@ func NewResolver(conf *config.Config) Resolver {
 		}
 		searcherCache[remoteName] = s
 		return s, nil
+	}
+
+	resolve.UpdateOptions = func(remoteName string, options map[string]string) error {
+		// Reload config to avoid overwriting concurrent changes (though mclone is mostly single process)
+		c, err := config.LoadConfig()
+		if err != nil {
+			return err
+		}
+		rc, ok := c.Remotes[remoteName]
+		if !ok {
+			return fmt.Errorf("remote %q not found during update", remoteName)
+		}
+
+		// Merge options
+		if rc.Options == nil {
+			rc.Options = make(map[string]string)
+		}
+		for k, v := range options {
+			rc.Options[k] = v
+		}
+		c.Remotes[remoteName] = rc
+
+		// Update local conf copy too if needed, but for now just save to disk
+		return c.Save()
 	}
 
 	return resolve

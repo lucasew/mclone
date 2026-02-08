@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -124,7 +125,6 @@ func interactiveConfig() {
 				options["namespace"] = strings.TrimSpace(ns)
 			case "geminioauth":
 				fmt.Println("No specific options required (uses hardcoded client ID).")
-				fmt.Println("You will be prompted to authenticate in the browser upon first use.")
 			case "ddg":
 				fmt.Println("No options required for DuckDuckGo search.")
 			case "search":
@@ -154,6 +154,35 @@ func interactiveConfig() {
 			}
 			conf.Save()
 			fmt.Printf("Remote %q added.\n", name)
+
+			if selectedType == "geminioauth" {
+				fmt.Print("Authenticate now? [Y/n]: ")
+				authChoice, _ := reader.ReadString('\n')
+				authChoice = strings.TrimSpace(strings.ToLower(authChoice))
+				if authChoice == "" || authChoice == "y" || authChoice == "yes" {
+					fmt.Println("Starting authentication flow...")
+					// Import "context" needed
+					// But we are in main package, need to check imports.
+					// We need to use remote.NewProvider to instantiate and trigger flow.
+					prov, err := remote.NewProvider(selectedType, name, options)
+					if err != nil {
+						fmt.Printf("Failed to create provider: %v\n", err)
+					} else {
+						// Trigger List to force auth
+						// We need context.
+						// Assuming context package is imported or we use context.Background() fully qualified if not?
+						// config.go imports: bufio, fmt, os, sort, strings, config, remote, cobra.
+						// context is NOT imported.
+						// I'll add context to imports in next Edit.
+						_, err := prov.List(context.Background())
+						if err == nil {
+							fmt.Println("Authentication successful! Token saved.")
+						} else {
+							fmt.Printf("Authentication failed: %v\n", err)
+						}
+					}
+				}
+			}
 
 		case "d":
 			fmt.Print("Enter name of remote to delete: ")

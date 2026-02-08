@@ -11,9 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -41,8 +39,11 @@ var scopes = []string{
 }
 
 type GeminiOAuthProvider struct {
-	base           *gemini.GeminiProvider
-	tokenStorePath string
+	base     *gemini.GeminiProvider
+	name     string
+	options  map[string]string
+	resolver remote.Resolver
+	token    *TokenData
 }
 
 func (p *GeminiOAuthProvider) Name() string { return "geminioauth" }
@@ -108,7 +109,7 @@ type TokenData struct {
 
 func (p *GeminiOAuthProvider) ensureToken(ctx context.Context) error {
 	token, err := p.loadToken()
-	if err == nil {
+	if err == nil && token != nil {
 		if time.Now().Add(time.Minute).Before(token.ExpiresAt) {
 			p.base.APIKey = token.AccessToken
 			return nil
@@ -138,24 +139,38 @@ func (p *GeminiOAuthProvider) ensureToken(ctx context.Context) error {
 }
 
 func (p *GeminiOAuthProvider) loadToken() (*TokenData, error) {
-	data, err := os.ReadFile(p.tokenStorePath)
-	if err != nil {
-		return nil, err
+	if p.token != nil {
+		return p.token, nil
 	}
+
+	// Load from options
+	tokenJSON := p.options["token"]
+	if tokenJSON == "" {
+		return nil, fmt.Errorf("no token found in config")
+	}
+
 	var token TokenData
-	if err := json.Unmarshal(data, &token); err != nil {
-		return nil, err
+	if err := json.Unmarshal([]byte(tokenJSON), &token); err != nil {
+		return nil, fmt.Errorf("failed to parse token from config: %w", err)
 	}
+	p.token = &token
 	return &token, nil
 }
 
 func (p *GeminiOAuthProvider) saveToken(token *TokenData) error {
+	p.token = token
 	data, err := json.Marshal(token)
 	if err != nil {
 		return err
 	}
-	os.MkdirAll(filepath.Dir(p.tokenStorePath), 0700)
-	return os.WriteFile(p.tokenStorePath, data, 0600)
+
+	if p.resolver.UpdateOptions != nil {
+		updates := map[string]string{
+			"token": string(data),
+		}
+		return p.resolver.UpdateOptions(p.name, updates)
+	}
+	return nil
 }
 
 func (p *GeminiOAuthProvider) refreshToken(refreshToken string) (*TokenData, error) {
@@ -340,18 +355,15 @@ func openBrowser(url string) {
 
 func init() {
 	remote.Register("geminioauth", func(name string, options map[string]string, resolve remote.Resolver) (remote.Provider, error) {
-		home, _ := os.UserHomeDir()
-		tokenPath := filepath.Join(home, ".config", "mclone", "gemini_oauth_token.json")
-
 		prov := &GeminiOAuthProvider{
-			tokenStorePath: tokenPath,
+			name:     name,
+			options:  options, // keep a copy to read initial token
+			resolver: resolve,
 		}
 
 		// Initialize base provider with our factory
 		base := &gemini.GeminiProvider{
-			APIKey: "", // Will be filled by ensureToken inside clientFactory? No, APIKey in base struct is string.
-			// But our clientFactory uses p.base.APIKey.
-			// Actually, we pass the factory TO the base provider.
+			APIKey:        "",
 			ClientFactory: prov.clientFactory,
 		}
 		prov.base = base
