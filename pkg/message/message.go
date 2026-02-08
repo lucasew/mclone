@@ -1,6 +1,6 @@
 package message
 
-import "encoding/json"
+import json "github.com/goccy/go-json"
 
 // Role represents the role of a message sender.
 type Role string

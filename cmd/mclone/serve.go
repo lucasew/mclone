@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/goccy/go-json"
 	"github.com/lucasew/mclone/pkg/config"
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/protocol"
@@ -106,19 +107,24 @@ var serveCmd = &cobra.Command{
 }
 
 func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider, overrideModel string, writer protocol.Writer, cmd *cobra.Command, defaultOpts message.ChatOptions) {
-	body, _ := io.ReadAll(r.Body)
+	var req chatRequest
+	var bodyReader io.Reader = r.Body
 
+	// If we need to save the raw request, we must read it all into memory first
+	// otherwise we can stream directly
 	if path, _ := cmd.Flags().GetString("save-raw-request"); path != "" {
+		body, _ := io.ReadAll(r.Body)
 		err := os.WriteFile(path, body, 0644)
 		if err != nil {
 			slog.Error("failed to save raw request", "path", path, "error", err)
 		} else {
 			slog.Debug("saved raw request", "path", path)
 		}
+		// Re-create reader for the decoder
+		bodyReader = bytes.NewReader(body)
 	}
 
-	var req chatRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := json.NewDecoder(bodyReader).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

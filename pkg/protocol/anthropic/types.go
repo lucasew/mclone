@@ -1,6 +1,6 @@
 package anthropic
 
-import "encoding/json"
+import json "github.com/goccy/go-json"
 
 type MessageResponse struct {
 	ID           string         `json:"id"`

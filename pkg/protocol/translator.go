@@ -1,9 +1,10 @@
 package protocol
 
 import (
-	"encoding/json"
 	"strings"
+	"unicode"
 
+	"github.com/goccy/go-json"
 	"github.com/lucasew/mclone/pkg/message"
 )
 
@@ -61,11 +62,16 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 
 	var parts []message.Part
 
-	// Try parsing as string first
-	var contentStr string
-	if err := json.Unmarshal(m.Content, &contentStr); err == nil {
-		parts = append(parts, parseText(contentStr)...)
-	} else {
+	// Fast path based on first byte
+	firstByte := firstNonSpaceByte(m.Content)
+
+	if firstByte == '"' {
+		// Try parsing as string
+		var contentStr string
+		if err := json.Unmarshal(m.Content, &contentStr); err == nil {
+			parts = append(parts, parseText(contentStr)...)
+		}
+	} else if firstByte == '[' {
 		// Try parsing as list of blocks
 		var blocks []ContentBlock
 		if err := json.Unmarshal(m.Content, &blocks); err == nil {
@@ -85,6 +91,21 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 					parts = append(parts, message.ToolResultPart{
 						ToolCallID: id, Content: extractContent(b.Content),
 					})
+				}
+			}
+		}
+	} else {
+		// Fallback for unknown types or failed fast-path
+		var contentStr string
+		if err := json.Unmarshal(m.Content, &contentStr); err == nil {
+			parts = append(parts, parseText(contentStr)...)
+		} else {
+			var blocks []ContentBlock
+			if err := json.Unmarshal(m.Content, &blocks); err == nil {
+				for _, b := range blocks {
+					if b.Type == "text" {
+						parts = append(parts, parseText(b.Text)...)
+					}
 				}
 			}
 		}
@@ -138,21 +159,36 @@ func extractContent(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
-	}
-	var blocks []ContentBlock
-	if err := json.Unmarshal(raw, &blocks); err == nil {
-		var parts []string
-		for _, b := range blocks {
-			if b.Type == "text" {
-				parts = append(parts, b.Text)
-			}
+
+	firstByte := firstNonSpaceByte(raw)
+	if firstByte == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return s
 		}
-		return strings.Join(parts, "")
+	} else if firstByte == '[' {
+		var blocks []ContentBlock
+		if err := json.Unmarshal(raw, &blocks); err == nil {
+			var parts []string
+			for _, b := range blocks {
+				if b.Type == "text" {
+					parts = append(parts, b.Text)
+				}
+			}
+			return strings.Join(parts, "")
+		}
 	}
+
 	return string(raw)
+}
+
+func firstNonSpaceByte(data []byte) byte {
+	for _, b := range data {
+		if !unicode.IsSpace(rune(b)) {
+			return b
+		}
+	}
+	return 0
 }
 
 func mergeTextParts(parts []message.Part) []message.Part {

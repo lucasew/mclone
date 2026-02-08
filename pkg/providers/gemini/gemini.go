@@ -2,7 +2,7 @@ package gemini
 
 import (
 	"context"
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"fmt"
 	"log/slog"
 	"strings"

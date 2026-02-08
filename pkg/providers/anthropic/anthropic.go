@@ -2,7 +2,7 @@ package anthropic
 
 import (
 	"context"
-	"encoding/json"
+	json "github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
 
