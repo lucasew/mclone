@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/lucasew/mclone/pkg/config"
 	"github.com/lucasew/mclone/pkg/remote"
@@ -44,10 +45,14 @@ func interactiveConfig() {
 			names = append(names, name)
 		}
 		sort.Strings(names)
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "NAME\tTYPE")
 		for _, name := range names {
 			r := conf.Remotes[name]
-			fmt.Printf("- %s (%s)\n", name, r.Type)
+			fmt.Fprintf(w, "%s\t%s\n", name, r.Type)
 		}
+		w.Flush()
 
 		fmt.Println("\ne) Edit existing remote")
 		fmt.Println("n) New remote")
@@ -85,9 +90,14 @@ func interactiveConfig() {
 			types := remote.ListTypes()
 			sort.Strings(types)
 			fmt.Println("Available provider types:")
+
+			typeWriter := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(typeWriter, "#\tTYPE")
 			for i, t := range types {
-				fmt.Printf("%d) %s\n", i+1, t)
+				fmt.Fprintf(typeWriter, "%d\t%s\n", i+1, t)
 			}
+			typeWriter.Flush()
+
 			fmt.Print("Select type (number or name): ")
 			typeChoice, _ := reader.ReadString('\n')
 			typeChoice = strings.TrimSpace(typeChoice)

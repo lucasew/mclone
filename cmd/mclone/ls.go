@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"text/tabwriter"
 
-	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/lucasew/mclone/pkg/config"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/spf13/cobra"
@@ -38,13 +38,12 @@ var lsCmd = &cobra.Command{
 			return
 		}
 
-		t := table.NewWriter()
-		t.SetOutputMirror(os.Stdout)
-		t.AppendHeader(table.Row{"Slug", "Name"})
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "SLUG\tNAME")
 		for _, m := range models {
-			t.AppendRow(table.Row{m.Slug, m.Name})
+			fmt.Fprintf(w, "%s\t%s\n", m.Slug, m.Name)
 		}
-		t.Render()
+		w.Flush()
 	},
 }
 
