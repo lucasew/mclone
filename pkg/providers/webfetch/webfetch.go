@@ -3,9 +3,9 @@ package webfetch
 import (
 	"bytes"
 	"context"
-	json "github.com/goccy/go-json"
 	"errors"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -16,10 +16,10 @@ import (
 	"syscall"
 	"time"
 
+	"codeberg.org/readeck/go-readability/v2"
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/mattn/godown"
-	"codeberg.org/readeck/go-readability/v2"
 	"golang.org/x/net/html"
 )
 
@@ -315,16 +315,16 @@ func fetchAndParse(ctx context.Context, rawLink string, format string) (string, 
 
 	// Wait, `fetchAndParse` logic:
 	/*
-	parser := readability.NewParser()
-	article, err := parser.ParseDocument(node, link)
-	if err != nil {
-		return "", err
-	}
+		parser := readability.NewParser()
+		article, err := parser.ParseDocument(node, link)
+		if err != nil {
+			return "", err
+		}
 
-	contentBuf := &bytes.Buffer{}
-	if err := article.RenderHTML(contentBuf); err != nil {
-		return "", err
-	}
+		contentBuf := &bytes.Buffer{}
+		if err := article.RenderHTML(contentBuf); err != nil {
+			return "", err
+		}
 	*/
 
 	// I will just use what I read.
