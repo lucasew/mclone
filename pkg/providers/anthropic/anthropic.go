@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -134,7 +135,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages
 			}
 		}
 		if err := stream.Err(); err != nil {
-			slog.Error("anthropic_stream_error", "error", err)
+			monitor.ReportError(ctx, err, "action", "anthropic_stream_error")
 			out <- message.ChatResponse{Error: err}
 			return
 		}
@@ -228,7 +229,9 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ToolUnionParam {
 		default:
 			// Regular function tool
 			var props map[string]any
-			json.Unmarshal(t.Parameters, &props)
+			if err := json.Unmarshal(t.Parameters, &props); err != nil {
+				monitor.ReportError(context.Background(), err, "action", "anthropic_tool_params_error", "name", t.Name)
+			}
 
 			schema := sdk.ToolInputSchemaParam{
 				Type: "object",

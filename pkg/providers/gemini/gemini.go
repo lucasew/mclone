@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 	"google.golang.org/genai"
 )
@@ -90,7 +91,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 
 		for resp, err := range client.Models.GenerateContentStream(ctx, modelName, contents, config) {
 			if err != nil {
-				slog.Error("gemini_stream_error", "error", err)
+				monitor.ReportError(ctx, err, "action", "gemini_stream_error")
 				out <- message.ChatResponse{Error: err}
 				return
 			}
@@ -128,7 +129,9 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 						if len(part.FunctionCall.Args) > 0 {
 							currentArgs := make(map[string]interface{})
 							if len(tc.Arguments) > 0 {
-								json.Unmarshal(tc.Arguments, &currentArgs)
+								if err := json.Unmarshal(tc.Arguments, &currentArgs); err != nil {
+									monitor.ReportError(ctx, err, "action", "gemini_arg_merge_error")
+								}
 							}
 							for k, v := range part.FunctionCall.Args {
 								currentArgs[k] = v
@@ -249,7 +252,9 @@ func ToGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Cont
 					continue
 				}
 				sdkArgs := make(map[string]interface{})
-				json.Unmarshal(v.Arguments, &sdkArgs)
+				if err := json.Unmarshal(v.Arguments, &sdkArgs); err != nil {
+					monitor.ReportError(context.Background(), err, "action", "gemini_arg_unmarshal_error")
+				}
 				sig := v.ThoughtSignature
 				if len(sig) == 0 {
 					if cached, ok := signatureCache.Load(v.ID); ok {

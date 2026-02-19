@@ -88,9 +88,7 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.ChatRespons
 		}},
 	}
 
-	for _, tc := range toolCalls {
-		resp.Choices[0].Message.ToolCalls = append(resp.Choices[0].Message.ToolCalls, tc)
-	}
+	resp.Choices[0].Message.ToolCalls = append(resp.Choices[0].Message.ToolCalls, toolCalls...)
 
 	rw.Header().Set("Content-Type", "application/json")
 	protocol.WriteJSON(rw, resp)

@@ -1,6 +1,6 @@
 module github.com/lucasew/mclone
 
-go 1.25.6
+go 1.24.0
 
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.1

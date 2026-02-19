@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 
 	sdk "github.com/openai/openai-go"
@@ -126,7 +127,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, modelName string, messages []
 			}
 		}
 		if err := stream.Err(); err != nil {
-			slog.Error("openai_stream_error", "error", err)
+			monitor.ReportError(ctx, err, "action", "openai_stream_error")
 			out <- message.ChatResponse{Error: err}
 			return
 		}
@@ -210,7 +211,9 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
 			continue
 		}
 		var params shared.FunctionParameters
-		json.Unmarshal(t.Parameters, &params)
+		if err := json.Unmarshal(t.Parameters, &params); err != nil {
+			monitor.ReportError(context.Background(), err, "action", "openai_tool_params_error", "name", t.Name)
+		}
 
 		out = append(out, sdk.ChatCompletionToolParam{
 			Function: shared.FunctionDefinitionParam{

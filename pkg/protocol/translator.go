@@ -45,8 +45,7 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 		role = message.RoleUser
 	case "tool":
 		var contentStr string
-		json.Unmarshal(m.Content, &contentStr)
-		if contentStr == "" {
+		if err := json.Unmarshal(m.Content, &contentStr); err != nil {
 			contentStr = string(m.Content)
 		}
 		return message.Message{
