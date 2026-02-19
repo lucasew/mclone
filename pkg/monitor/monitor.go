@@ -12,5 +12,6 @@ func ReportError(ctx context.Context, err error, args ...any) {
 		return
 	}
 	// For now, just log using slog. In the future, this can be hooked to Sentry or other APM.
-	slog.ErrorContext(ctx, "unexpected error", "error", err, "args", args)
+	logArgs := append([]any{"error", err}, args...)
+	slog.ErrorContext(ctx, "unexpected error", logArgs...)
 }

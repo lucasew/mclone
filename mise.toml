@@ -1,5 +1,5 @@
 [tools]
-go = "1.25.6"
+go = "1.24.0"
 "go:github.com/golangci/golangci-lint/cmd/golangci-lint" = "v1.64.6"
 node = "22.13.1"
 actionlint = "1.7.7"
