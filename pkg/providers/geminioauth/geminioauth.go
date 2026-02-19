@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/providers/gemini"
 	"github.com/lucasew/mclone/pkg/remote"
 )
@@ -358,11 +359,13 @@ func (p *GeminiOAuthProvider) ensureToken(ctx context.Context) error {
 		slog.Info("gemini_oauth_refreshing_token")
 		newToken, err := p.refreshToken(token.RefreshToken)
 		if err == nil {
-			p.saveToken(newToken)
+			if err := p.saveToken(newToken); err != nil {
+				monitor.ReportError(ctx, err, "action", "gemini_oauth_save_token_failed")
+			}
 			p.base.APIKey = newToken.AccessToken
 			return nil
 		}
-		slog.Warn("gemini_oauth_refresh_failed", "error", err)
+		monitor.ReportError(ctx, err, "action", "gemini_oauth_refresh_failed")
 	}
 
 	// Login
@@ -383,7 +386,9 @@ func (p *GeminiOAuthProvider) ensureToken(ctx context.Context) error {
 		}
 	}
 
-	p.saveToken(newToken)
+	if err := p.saveToken(newToken); err != nil {
+		monitor.ReportError(ctx, err, "action", "gemini_oauth_save_token_failed")
+	}
 	p.base.APIKey = newToken.AccessToken
 	return nil
 }
@@ -594,7 +599,9 @@ func (p *GeminiOAuthProvider) performLoginFlow(ctx context.Context) (*TokenData,
 			errCh <- fmt.Errorf("no code")
 			return
 		}
-		w.Write([]byte("Login successful! You can close this window."))
+		if _, err := w.Write([]byte("Login successful! You can close this window.")); err != nil {
+			monitor.ReportError(context.Background(), err, "action", "gemini_oauth_response_write_failed")
+		}
 		codeCh <- code
 	})
 
@@ -605,7 +612,11 @@ func (p *GeminiOAuthProvider) performLoginFlow(ctx context.Context) (*TokenData,
 			errCh <- err
 		}
 	}()
-	defer srv.Shutdown(context.Background())
+	defer func() {
+		if err := srv.Shutdown(context.Background()); err != nil {
+			monitor.ReportError(context.Background(), err, "action", "gemini_oauth_server_shutdown_failed")
+		}
+	}()
 
 	// 3. Open Browser
 	u, _ := url.Parse(authURL)
@@ -671,7 +682,9 @@ func (p *GeminiOAuthProvider) exchangeCode(code, verifier string) (*TokenData, e
 func generatePKCE() (verifier, challenge string) {
 	// Verifier: random 32-byte string, base64url encoded
 	b := make([]byte, 32)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
 	verifier = base64.RawURLEncoding.EncodeToString(b)
 
 	// Challenge: SHA256(verifier), base64url encoded
@@ -682,7 +695,9 @@ func generatePKCE() (verifier, challenge string) {
 
 func generateRandomString(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 

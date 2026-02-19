@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 )
 
@@ -127,12 +128,14 @@ func (p *SearchWrapperProvider) Chat(ctx context.Context, modelName string, mess
 				var args struct {
 					Query string `json:"query"`
 				}
-				json.Unmarshal(tc.Arguments, &args)
+				if err := json.Unmarshal(tc.Arguments, &args); err != nil {
+					monitor.ReportError(ctx, err, "action", "search_args_error")
+				}
 
 				slog.Info("search_executing", "query", args.Query, "loop", loop)
 				results, err := p.searcher.Search(ctx, args.Query, p.maxResults)
 				if err != nil {
-					slog.Error("search_error", "query", args.Query, "error", err)
+					monitor.ReportError(ctx, err, "action", "search_error", "query", args.Query)
 					results = []remote.SearchResult{{
 						Title:   "Search error",
 						Snippet: err.Error(),

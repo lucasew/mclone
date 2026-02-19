@@ -336,7 +336,9 @@ func fetchAndParse(ctx context.Context, rawLink string, format string) (string, 
 	switch format {
 	case "md", "markdown":
 		var out bytes.Buffer
-		godown.Convert(&out, contentBuf, nil)
+		if err := godown.Convert(&out, contentBuf, nil); err != nil {
+			return "", err
+		}
 		return out.String(), nil
 	case "json":
 		b, err := json.Marshal(map[string]string{
@@ -351,13 +353,17 @@ func fetchAndParse(ctx context.Context, rawLink string, format string) (string, 
 		return string(b), nil
 	case "text", "txt":
 		var out bytes.Buffer
-		godown.Convert(&out, contentBuf, nil)
+		if err := godown.Convert(&out, contentBuf, nil); err != nil {
+			return "", err
+		}
 		return out.String(), nil
 	case "html":
 		return contentBuf.String(), nil
 	default:
 		var out bytes.Buffer
-		godown.Convert(&out, contentBuf, nil)
+		if err := godown.Convert(&out, contentBuf, nil); err != nil {
+			return "", err
+		}
 		return out.String(), nil
 	}
 }

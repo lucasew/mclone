@@ -69,7 +69,9 @@ func interactiveConfig() {
 			name = strings.TrimSpace(name)
 			if _, ok := conf.Remotes[name]; ok {
 				delete(conf.Remotes, name)
-				conf.Save()
+				if err := conf.Save(); err != nil {
+					fmt.Printf("Error saving config: %v\n", err)
+				}
 				fmt.Printf("Remote %q deleted.\n", name)
 			} else {
 				fmt.Println("Remote not found")
@@ -111,9 +113,10 @@ func interactiveConfig() {
 			}
 			if selectedType == "" {
 				var idx int
-				fmt.Sscanf(typeChoice, "%d", &idx)
-				if idx > 0 && idx <= len(types) {
-					selectedType = types[idx-1]
+				if _, err := fmt.Sscanf(typeChoice, "%d", &idx); err == nil {
+					if idx > 0 && idx <= len(types) {
+						selectedType = types[idx-1]
+					}
 				}
 			}
 
@@ -185,7 +188,9 @@ func interactiveConfig() {
 				Type:    selectedType,
 				Options: toAnyMap(options),
 			}
-			conf.Save()
+			if err := conf.Save(); err != nil {
+				fmt.Printf("Error saving config: %v\n", err)
+			}
 			fmt.Printf("Remote %q added.\n", name)
 
 			if selectedType == "geminioauth" {

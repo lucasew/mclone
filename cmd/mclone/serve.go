@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/lucasew/mclone/pkg/config"
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/protocol"
 	"github.com/lucasew/mclone/pkg/protocol/anthropic"
 	"github.com/lucasew/mclone/pkg/protocol/openai"
@@ -57,14 +59,14 @@ var serveCmd = &cobra.Command{
 
 		conf, err := config.LoadConfig()
 		if err != nil {
-			slog.Error("failed to load config", "error", err)
+			monitor.ReportError(cmd.Context(), err, "action", "load_config")
 			return
 		}
 
 		resolve := remote.NewResolver(conf)
 		p, err := resolve.Provider(remoteName)
 		if err != nil {
-			slog.Error("failed to create provider", "error", err)
+			monitor.ReportError(cmd.Context(), err, "action", "create_provider")
 			return
 		}
 
@@ -101,7 +103,7 @@ var serveCmd = &cobra.Command{
 
 		slog.Info("starting server", "remote", remoteName, "port", port)
 		if err := http.ListenAndServe(fmt.Sprintf(":%d", port), handler); err != nil {
-			slog.Error("server failed", "error", err)
+			monitor.ReportError(cmd.Context(), err, "action", "server_listen")
 		}
 	},
 }
@@ -114,7 +116,7 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 		body, _ := io.ReadAll(r.Body)
 		err := os.WriteFile(path, body, 0644)
 		if err != nil {
-			slog.Error("failed to save raw request", "path", path, "error", err)
+			monitor.ReportError(r.Context(), err, "action", "save_raw_request", "path", path)
 		} else {
 			slog.Debug("saved raw request", "path", path)
 		}
@@ -134,7 +136,7 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 
 	slog.Info("incoming request", "req_model", req.Model, "chat_model", chatModel)
 
-	msgs := parseMessages(req)
+	msgs := parseMessages(r.Context(), req)
 
 	opts := message.ChatOptions{}
 	hasSearchTool := false
@@ -165,7 +167,7 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 
 	respChan, err := p.Chat(r.Context(), chatModel, msgs, opts)
 	if err != nil {
-		slog.Error("chat failed", "error", err)
+		monitor.ReportError(r.Context(), err, "action", "chat_failed")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -173,7 +175,7 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 	writer.ServeResponse(w, respChan, responseModel, req.Stream)
 }
 
-func parseMessages(req chatRequest) []message.Message {
+func parseMessages(ctx context.Context, req chatRequest) []message.Message {
 	var msgs []message.Message
 
 	if req.System != nil {
@@ -200,7 +202,7 @@ func parseMessages(req chatRequest) []message.Message {
 	for i, m := range req.Messages {
 		msg, err := m.ToMessage()
 		if err != nil {
-			slog.Error("failed to convert message", "index", i, "error", err)
+			monitor.ReportError(ctx, err, "action", "convert_message", "index", i)
 			continue
 		}
 		msgs = append(msgs, msg)
@@ -235,7 +237,9 @@ func serveModels(w http.ResponseWriter, r *http.Request, p remote.Provider) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		monitor.ReportError(r.Context(), err, "action", "serve_models_encode_error")
+	}
 }
 
 func parseGenerationDefaults(opts map[string]any) message.ChatOptions {
