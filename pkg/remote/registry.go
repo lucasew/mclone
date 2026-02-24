@@ -10,21 +10,34 @@ import (
 	"github.com/mitchellh/mapstructure"
 )
 
+// Factory is a function type for creating new Provider instances.
+// It receives the name of the remote, its configuration options, and a Resolver for looking up other remotes.
 type Factory func(name string, options map[string]any, resolve Resolver) (Provider, error)
 
-// Resolver provides access to both provider and searcher resolution.
+// Resolver acts as a central registry for looking up providers and searchers.
+// It abstracts away the details of configuration and instantiation.
 type Resolver struct {
-	Provider      func(remoteName string) (Provider, error)
-	Searcher      func(remoteName string) (Searcher, error)
+	// Provider resolves a remote name to a Provider instance.
+	// It handles caching and implicit balance group resolution.
+	Provider func(remoteName string) (Provider, error)
+
+	// Searcher resolves a remote name to a Searcher instance.
+	Searcher func(remoteName string) (Searcher, error)
+
+	// UpdateOptions updates the configuration options for a given remote.
+	// This persists the changes to the configuration file.
 	UpdateOptions func(remoteName string, options map[string]any) error
 }
 
 var registry = make(map[string]Factory)
 
+// Register adds a new provider type to the registry.
+// The typeName is used in the configuration file to specify the provider type (e.g., "openai", "anthropic").
 func Register(typeName string, factory Factory) {
 	registry[typeName] = factory
 }
 
+// ListTypes returns a slice of all registered provider type names.
 func ListTypes() []string {
 	var types []string
 	for t := range registry {
@@ -33,9 +46,20 @@ func ListTypes() []string {
 	return types
 }
 
-// NewResolver creates a Resolver from a config.
-// It supports implicit balance groups via the ":" naming convention:
-// remotes named "anth:1", "anth:2" form an implicit balance group "anth".
+// NewResolver creates a new Resolver instance based on the provided configuration.
+//
+// Implicit Balancing:
+// NewResolver implements an implicit balancing mechanism. If a remote name is not explicitly defined
+// with a type, the resolver looks for remotes that share the name as a prefix followed by a colon (e.g., "myremote:1", "myremote:2").
+// If found, these remotes are automatically grouped into a balanced pool under the "myremote" name.
+//
+// Failover Configuration:
+// When an implicit balance group is created, it inherits options from the base remote configuration if it exists.
+// Additionally, it aggregates `failover_threshold` settings from individual members, allowing specific failover policies per backend.
+//
+// Configuration Updates:
+// The returned Resolver includes an UpdateOptions function that writes changes back to the configuration file,
+// ensuring persistence of runtime changes like disabling a failing backend.
 func NewResolver(conf *config.Config) Resolver {
 	providerCache := make(map[string]Provider)
 	searcherCache := make(map[string]Searcher)
@@ -105,6 +129,13 @@ func NewResolver(conf *config.Config) Resolver {
 	return resolve
 }
 
+// resolveOne attempts to resolve a single provider or construct a balance group.
+//
+// It follows this logic:
+// 1. Checks for an exact match in the config with a defined Type.
+// 2. If no exact match with Type, looks for "implicit members" (remotes starting with "remoteName:").
+// 3. If members are found, constructs a "balance" provider grouping them.
+// 4. Propagates `failover_threshold` from members to the group options.
 func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provider, error) {
 	rc, exactMatch := conf.Remotes[remoteName]
 
@@ -166,6 +197,8 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 	return factory(remoteName, opts, resolve)
 }
 
+// NewProvider creates a new provider instance directly by type name.
+// This bypasses the Resolver logic and is useful for direct instantiation or testing.
 func NewProvider(typeName string, name string, options map[string]any) (Provider, error) {
 	factory, ok := registry[typeName]
 	if !ok {
@@ -174,7 +207,11 @@ func NewProvider(typeName string, name string, options map[string]any) (Provider
 	return factory(name, options, Resolver{})
 }
 
-// DecodeOptions decodes input into output using mapstructure with weak typing.
+// DecodeOptions maps a generic map[string]any configuration to a specific struct.
+//
+// It uses `mapstructure` with `WeaklyTypedInput: true`, enabling loose type conversion
+// (e.g., parsing string "123" into an int field). This is critical for parsing TOML/env configurations
+// where types might not strict matches.
 func DecodeOptions(input interface{}, output interface{}) error {
 	config := &mapstructure.DecoderConfig{
 		Metadata:         nil,
