@@ -24,9 +24,8 @@ jobs:
           fetch-depth: 0
 
       - name: Install mise
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v3
         with:
-          version: latest
           install: true
           cache: true
 
@@ -52,7 +51,6 @@ jobs:
           title: "chore: update generated code"
           body: "This PR updates generated code."
           branch: "chore/codegen-update"
-          base: ${{ github.head_ref }}
 
       - name: CI
         run: mise run ci
