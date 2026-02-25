@@ -15,7 +15,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  autorelease:
+  mise-ci:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
