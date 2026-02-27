@@ -30,3 +30,5 @@ serve.log
 
 # Mise
 .mise.local.toml
+# Added by goreleaser init:
+dist/
