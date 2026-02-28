@@ -7,10 +7,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+	builtBy = "unknown"
+)
+
 var rootCmd = &cobra.Command{
-	Use:   "mclone",
-	Short: "mclone is rclone for LLMs",
-	Long:  `A command line tool to manage and sync LLMs across different providers like Ollama, Hugging Face, and Local storage.`,
+	Use:     "mclone",
+	Short:   "mclone is rclone for LLMs",
+	Long:    `A unified LLM management and serving layer. Exposes multiple providers behind OpenAI and Anthropic-compatible APIs.`,
+	Version: version,
+}
+
+func init() {
+	rootCmd.SetVersionTemplate(fmt.Sprintf("mclone %s (commit: %s, built: %s, by: %s)\n", version, commit, date, builtBy))
 }
 
 func main() {
