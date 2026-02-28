@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -14,9 +15,14 @@ import (
 
 var lsCmd = &cobra.Command{
 	Use:   "ls [remote]",
-	Short: "List models in a remote",
-	Args:  cobra.ExactArgs(1),
+	Short: "List remotes, or models in a remote",
+	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) == 0 {
+			listRemotes(cmd)
+			return
+		}
+
 		remoteName := strings.TrimSuffix(args[0], ":")
 
 		resolve := remote.NewResolver(config.LoaderFrom(cmd.Context()))
@@ -39,6 +45,33 @@ var lsCmd = &cobra.Command{
 		}
 		w.Flush()
 	},
+}
+
+func listRemotes(cmd *cobra.Command) {
+	loader := config.LoaderFrom(cmd.Context())
+	cfg, err := loader.Load()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		return
+	}
+
+	if len(cfg.Remotes) == 0 {
+		fmt.Println("No remotes configured.")
+		return
+	}
+
+	names := make([]string, 0, len(cfg.Remotes))
+	for name := range cfg.Remotes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "NAME\tTYPE")
+	for _, name := range names {
+		fmt.Fprintf(w, "%s\t%s\n", name, cfg.Remotes[name].Type)
+	}
+	w.Flush()
 }
 
 func init() {
