@@ -24,7 +24,7 @@ import (
 
 const (
 	maxRedirects      = 5
-	httpClientTimeout = 10 * time.Second
+	httpClientTimeout = 30 * time.Second
 	maxBodySize       = int64(2 * 1024 * 1024) // 2 MiB
 	dialerTimeout     = 30 * time.Second
 	dialerKeepAlive   = 30 * time.Second
