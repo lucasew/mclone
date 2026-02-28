@@ -115,7 +115,7 @@ func parseResults(r io.Reader, maxResults int) ([]remote.SearchResult, error) {
 					}
 				}
 
-				if link != "" {
+				if link != "" && !strings.Contains(link, "duckduckgo.com/y.js") {
 					results = append(results, remote.SearchResult{
 						Title:   title,
 						URL:     link,
