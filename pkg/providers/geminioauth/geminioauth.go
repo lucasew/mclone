@@ -11,7 +11,6 @@ import (
 	json "github.com/goccy/go-json"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -158,87 +157,34 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 		// URL for streaming: v1internal:streamGenerateContent?alt=sse
 		url := "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
 
-		var resp *http.Response
-		maxRetries := 5
-		baseDelay := 1 * time.Second
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			out <- message.ChatResponse{Error: err}
+			return
+		}
 
-		for attempt := 0; attempt <= maxRetries; attempt++ {
-			req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
-			if err != nil {
-				out <- message.ChatResponse{Error: err}
-				return
-			}
+		req.Header.Set("Authorization", "Bearer "+p.token.AccessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
+		req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
+		req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
 
-			req.Header.Set("Authorization", "Bearer "+p.token.AccessToken)
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
-			req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
-			req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			out <- message.ChatResponse{Error: err}
+			return
+		}
 
-			resp, err = http.DefaultClient.Do(req)
-			if err != nil {
-				out <- message.ChatResponse{Error: err}
-				return
-			}
-
-			if resp.StatusCode == http.StatusOK {
-				break
-			}
-
-			// Handle errors
+		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 
-			// Check for 429 or 503
 			if resp.StatusCode == 429 || resp.StatusCode == 503 {
-				// Parse retry delay
-				delay := baseDelay * time.Duration(math.Pow(2, float64(attempt))) // Exponential backoff default
-
-				// Try to parse detailed error for retry info
-				var errResp struct {
-					Error struct {
-						Code    int
-						Message string
-						Details []map[string]interface{}
-					}
-				}
-				if json.Unmarshal(body, &errResp) == nil {
-					// Check details for RetryInfo
-					for _, det := range errResp.Error.Details {
-						if det["@type"] == "type.googleapis.com/google.rpc.RetryInfo" {
-							if retryDelayStr, ok := det["retryDelay"].(string); ok {
-								if d, err := time.ParseDuration(retryDelayStr); err == nil {
-									delay = d + 100*time.Millisecond // Add buffer
-								}
-							}
-						}
-					}
-				}
-
-				// Check header
-				if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-					if d, err := time.ParseDuration(retryAfter + "s"); err == nil {
-						delay = d
-					}
-				}
-
-				if attempt == maxRetries {
-					out <- message.ChatResponse{Error: fmt.Errorf("api error %d (max retries reached): %s", resp.StatusCode, string(body))}
-					return
-				}
-
-				slog.Warn("gemini_rate_limit", "status", resp.StatusCode, "retry_after", delay, "attempt", attempt+1)
-
-				select {
-				case <-time.After(delay):
-					continue
-				case <-ctx.Done():
-					out <- message.ChatResponse{Error: ctx.Err()}
-					return
-				}
+				retryAfter := parseRetryAfter(resp, body)
+				out <- message.ChatResponse{Error: &message.ErrRateLimit{RetryAfter: retryAfter}}
+				return
 			}
 
-			// Fatal error
 			out <- message.ChatResponse{Error: fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))}
 			return
 		}
@@ -699,6 +645,40 @@ func generateRandomString(n int) string {
 		panic(fmt.Sprintf("crypto/rand failed: %v", err))
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// parseRetryAfter extracts a retry delay from the response.
+// Checks Google RPC RetryInfo in the JSON body, then Retry-After header.
+// Returns 0 if no hint was found (caller should use backoff).
+func parseRetryAfter(resp *http.Response, body []byte) time.Duration {
+	var delay time.Duration
+
+	// Try Google RPC RetryInfo in error details
+	var errResp struct {
+		Error struct {
+			Details []map[string]interface{}
+		}
+	}
+	if json.Unmarshal(body, &errResp) == nil {
+		for _, det := range errResp.Error.Details {
+			if det["@type"] == "type.googleapis.com/google.rpc.RetryInfo" {
+				if retryDelayStr, ok := det["retryDelay"].(string); ok {
+					if d, err := time.ParseDuration(retryDelayStr); err == nil {
+						delay = d + 100*time.Millisecond
+					}
+				}
+			}
+		}
+	}
+
+	// Retry-After header overrides
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		if d, err := time.ParseDuration(ra + "s"); err == nil {
+			delay = d
+		}
+	}
+
+	return delay
 }
 
 func openBrowser(url string) {

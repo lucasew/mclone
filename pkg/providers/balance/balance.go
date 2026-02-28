@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +23,7 @@ type backend struct {
 	name              string
 	availableAt       time.Time
 	failoverThreshold time.Duration
+	consecutive       int // consecutive rate limit errors (for backoff when RetryAfter==0)
 	mu                sync.Mutex
 }
 
@@ -35,6 +38,12 @@ func (b *backend) markUnavailable(retryAfter time.Duration) {
 	defer b.mu.Unlock()
 	b.availableAt = time.Now().Add(retryAfter)
 	slog.Info("balance_backend_cooldown", "backend", b.name, "until", b.availableAt.Format(time.RFC3339))
+}
+
+func (b *backend) resetConsecutive() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.consecutive = 0
 }
 
 type BalanceProvider struct {
@@ -134,8 +143,9 @@ func (p *BalanceProvider) wrapChannel(ctx context.Context, ch <-chan message.Cha
 		var gotContent bool
 		for resp := range ch {
 			if resp.Error != nil && !gotContent {
-				slog.Warn("balance_stream_error", "backend", b.name, "error", resp.Error)
-				b.markUnavailable(30 * time.Second) // Default cooldown on error
+				cooldown := p.handleBackendError(b, resp.Error)
+				b.markUnavailable(cooldown)
+
 				failCh, err := p.failoverFrom(ctx, b, modelName, messages, options, affinityKey)
 				if err != nil {
 					out <- message.ChatResponse{Error: err}
@@ -148,11 +158,36 @@ func (p *BalanceProvider) wrapChannel(ctx context.Context, ch <-chan message.Cha
 			}
 			if resp.Content != "" {
 				gotContent = true
+				b.resetConsecutive()
 			}
 			out <- resp
 		}
 	}()
 	return out
+}
+
+// handleBackendError determines cooldown duration from an error.
+// For ErrRateLimit with RetryAfter > 0, uses that value and resets consecutive.
+// For ErrRateLimit with RetryAfter == 0, uses exponential backoff (1s * 2^consecutive).
+// For other errors, uses a fixed 30s cooldown.
+func (p *BalanceProvider) handleBackendError(b *backend, err error) time.Duration {
+	var rl *message.ErrRateLimit
+	if errors.As(err, &rl) {
+		if rl.RetryAfter > 0 {
+			b.resetConsecutive()
+			slog.Warn("balance_rate_limit", "backend", b.name, "retry_after", rl.RetryAfter)
+			return rl.RetryAfter
+		}
+		b.mu.Lock()
+		b.consecutive++
+		n := b.consecutive
+		b.mu.Unlock()
+		cooldown := time.Second * time.Duration(math.Pow(2, float64(n)))
+		slog.Warn("balance_rate_limit_backoff", "backend", b.name, "consecutive", n, "cooldown", cooldown)
+		return cooldown
+	}
+	slog.Warn("balance_stream_error", "backend", b.name, "error", err)
+	return 30 * time.Second
 }
 
 func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, modelName string, messages []message.Message, options message.ChatOptions, affinityKey string) (<-chan message.ChatResponse, error) {
