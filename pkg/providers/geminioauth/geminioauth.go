@@ -181,6 +181,7 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 
 			if resp.StatusCode == 429 || resp.StatusCode == 503 {
 				retryAfter := parseRetryAfter(resp, body)
+				slog.Warn("gemini_rate_limit", "status", resp.StatusCode, "retry_after", retryAfter)
 				out <- message.ChatResponse{Error: &message.ErrRateLimit{RetryAfter: retryAfter}}
 				return
 			}
