@@ -113,11 +113,13 @@ func (p *ToolboxProvider) Chat(ctx context.Context, modelName string, messages [
 			for _, tc := range handledCalls {
 				tool := p.toolMap[strings.ToLower(tc.Name)]
 				slog.Info("toolbox_execute", "tool", tc.Name, "loop", loop)
+				slog.Debug("toolbox_call_args", "tool", tc.Name, "args", string(tc.Arguments))
 
 				result, err := tool.Execute(ctx, tc.Arguments)
 				if err != nil {
 					result = fmt.Sprintf("Error: %v", err)
 				}
+				slog.Debug("toolbox_call_result", "tool", tc.Name, "result_len", len(result), "result", result)
 				currentMsgs = append(currentMsgs, message.Message{
 					Role: message.RoleTool,
 					Parts: []message.Part{message.ToolResultPart{
