@@ -17,22 +17,30 @@ import (
 
 	"codeberg.org/readeck/go-readability/v2"
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/lucasew/mclone/pkg/tools"
 	"github.com/mattn/godown"
 	"golang.org/x/net/html"
 )
 
 const (
-	maxRedirects      = 5
-	httpClientTimeout = 30 * time.Second
-	maxBodySize       = int64(2 * 1024 * 1024) // 2 MiB
-	dialerTimeout     = 30 * time.Second
-	dialerKeepAlive   = 30 * time.Second
+	defaultMaxRedirects = 5
+	defaultTimeout      = 30 * time.Second
+	defaultMaxBodySize  = int64(2 * 1024 * 1024) // 2 MiB
 )
 
 var webFetchToolSchema = json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","description":"The URL of the article or web page to fetch"},"format":{"type":"string","enum":["md","markdown","html","text","json"],"description":"The output format (default: md)"}},"required":["url"]}`)
 
-type webfetchSource struct{}
+type webfetchConfig struct {
+	Timeout      string `mapstructure:"timeout"`
+	MaxRedirects int    `mapstructure:"max_redirects"`
+	MaxBodySize  int64  `mapstructure:"max_body_size"`
+}
+
+type webfetchSource struct {
+	client      *http.Client
+	maxBodySize int64
+}
 
 func (s *webfetchSource) Tools(ctx context.Context) ([]tools.Tool, error) {
 	return []tools.Tool{{
@@ -53,30 +61,31 @@ func (s *webfetchSource) Tools(ctx context.Context) ([]tools.Tool, error) {
 			if a.Format == "" {
 				a.Format = "md"
 			}
-			return fetchAndParse(ctx, a.URL, a.Format)
+			return s.fetchAndParse(ctx, a.URL, a.Format)
 		},
 	}}, nil
 }
 
-// HTTP client infrastructure
-
-var httpClient = &http.Client{
-	Transport: &http.Transport{
-		DialContext: newSafeDialer().DialContext,
-	},
-	Timeout: httpClientTimeout,
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= maxRedirects {
-			return fmt.Errorf("stopped after %d redirects", maxRedirects)
-		}
-		return nil
-	},
+// newHTTPClient creates an HTTP client with the given parameters.
+func newHTTPClient(timeout time.Duration, maxRedirects int) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: newSafeDialer(timeout).DialContext,
+		},
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			return nil
+		},
+	}
 }
 
-func newSafeDialer() *net.Dialer {
+func newSafeDialer(timeout time.Duration) *net.Dialer {
 	return &net.Dialer{
-		Timeout:   dialerTimeout,
-		KeepAlive: dialerKeepAlive,
+		Timeout:   timeout,
+		KeepAlive: timeout,
 		Control: func(network, address string, c syscall.RawConn) error {
 			host, _, err := net.SplitHostPort(address)
 			if err != nil {
@@ -106,7 +115,7 @@ func getRandomUserAgent() string {
 	return userAgentPool[rand.Intn(len(userAgentPool))]
 }
 
-func fetchAndParse(ctx context.Context, rawLink string, format string) (string, error) {
+func (s *webfetchSource) fetchAndParse(ctx context.Context, rawLink string, format string) (string, error) {
 	link, err := url.Parse(rawLink)
 	if err != nil {
 		return "", err
@@ -121,13 +130,13 @@ func fetchAndParse(ctx context.Context, rawLink string, format string) (string, 
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
-	res, err := httpClient.Do(req)
+	res, err := s.client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer res.Body.Close()
 
-	reader := io.LimitReader(res.Body, maxBodySize)
+	reader := io.LimitReader(res.Body, s.maxBodySize)
 
 	node, err := html.Parse(reader)
 	if err != nil {
@@ -170,6 +179,33 @@ func fetchAndParse(ctx context.Context, rawLink string, format string) (string, 
 
 func init() {
 	tools.Register("webfetch", func(name string, options map[string]any) (tools.ToolSource, error) {
-		return &webfetchSource{}, nil
+		var cfg webfetchConfig
+		if err := remote.DecodeOptions(options, &cfg); err != nil {
+			return nil, err
+		}
+
+		timeout := defaultTimeout
+		if cfg.Timeout != "" {
+			d, err := time.ParseDuration(cfg.Timeout)
+			if err != nil {
+				return nil, fmt.Errorf("webfetch: invalid timeout %q: %w", cfg.Timeout, err)
+			}
+			timeout = d
+		}
+
+		maxRedirects := defaultMaxRedirects
+		if cfg.MaxRedirects > 0 {
+			maxRedirects = cfg.MaxRedirects
+		}
+
+		maxBody := defaultMaxBodySize
+		if cfg.MaxBodySize > 0 {
+			maxBody = cfg.MaxBodySize
+		}
+
+		return &webfetchSource{
+			client:      newHTTPClient(timeout, maxRedirects),
+			maxBodySize: maxBody,
+		}, nil
 	})
 }
