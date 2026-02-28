@@ -1,17 +1,36 @@
-[remotes]
+[tools]
 
-# this would be the entrypoint, mclone serve assistant
-# the wrapping is necessary because WebFetch and WebSearch happen server side
-# and this acts as a compatibility layer which resolves the tools in mclone
-# instead of the agent
-[remotes.assistant]
+# tool sources provide server-side tools to the toolbox provider
+# each tool source produces one or more tools that the LLM can call
+# use tool_name option to customize the name exposed to the LLM
+
+[tools.search]
+type = 'duckduckgo'
+
+# [tools.search.options]
+# max_results = 5
+# tool_name = 'WebSearch'  # default
+
+[tools.webfetch]
 type = 'webfetch'
 
-[remotes.assistant.options]
-provider = 'with_search'
+# [tools.webfetch.options]
+# timeout = '30s'
+# max_redirects = 5
+# max_body_size = 2097152  # 2 MiB
+# tool_name = 'WebFetch'  # default
 
-[remotes.ddg]
-type = 'ddg'
+[remotes]
+
+# the toolbox provider wraps a base provider and adds server-side tools
+# mclone serve assistant
+[remotes.assistant]
+type = 'toolbox'
+
+[remotes.assistant.options]
+provider = 'models'
+tools = ['search', 'webfetch']
+# max_loops = 20
 
 [remotes.gemini]
 type = 'geminioauth'
@@ -27,6 +46,10 @@ type = 'openai'
 api_key = 'modalresearch_TAKE_FROM_THE_SITE'
 base_url = 'https://api.us-west-2.modal.direct/v1'
 
+# the route provider maps model slugs to remote:model pairs
+# when a client requests "claude-opus-4-6", route resolves it
+# to the configured remote and backend model
+# format: 'slug' = 'remote:backend_model'
 [remotes.models]
 type = 'route'
 
@@ -43,10 +66,3 @@ type = 'ollama'
 
 [remotes.whiterun.options]
 base_url = 'http://whiterun:11434'
-
-[remotes.with_search]
-type = 'search'
-
-[remotes.with_search.options]
-provider = 'models'
-search = 'ddg'
