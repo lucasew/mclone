@@ -19,13 +19,7 @@ var lsCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		remoteName := strings.TrimSuffix(args[0], ":")
 
-		conf, err := config.LoadConfig()
-		if err != nil {
-			fmt.Printf("Error loading config: %v\n", err)
-			return
-		}
-
-		resolve := remote.NewResolver(conf)
+		resolve := remote.NewResolver(config.LoaderFrom(cmd.Context()))
 		p, err := resolve.Provider(remoteName)
 		if err != nil {
 			fmt.Printf("Error creating provider: %v\n", err)

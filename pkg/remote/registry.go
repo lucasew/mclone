@@ -33,10 +33,15 @@ func ListTypes() []string {
 	return types
 }
 
-// NewResolver creates a Resolver from a config.
+// NewResolver creates a Resolver from a ConfigLoader.
 // It supports implicit balance groups via the ":" naming convention:
 // remotes named "anth:1", "anth:2" form an implicit balance group "anth".
-func NewResolver(conf *config.Config) Resolver {
+func NewResolver(loader *config.ConfigLoader) Resolver {
+	conf, err := loader.Load()
+	if err != nil {
+		panic(fmt.Sprintf("failed to load config: %v", err))
+	}
+
 	providerCache := make(map[string]Provider)
 	searcherCache := make(map[string]Searcher)
 
@@ -77,8 +82,8 @@ func NewResolver(conf *config.Config) Resolver {
 	}
 
 	resolve.UpdateOptions = func(remoteName string, options map[string]any) error {
-		// Reload config to avoid overwriting concurrent changes (though mclone is mostly single process)
-		c, err := config.LoadConfig()
+		// Reload config to avoid overwriting concurrent changes
+		c, err := loader.Load()
 		if err != nil {
 			return err
 		}
@@ -89,7 +94,6 @@ func NewResolver(conf *config.Config) Resolver {
 
 		slog.Info("updating_options", "remote", remoteName, "keys", len(options))
 
-		// Merge options
 		if rc.Options == nil {
 			rc.Options = make(map[string]any)
 		}
@@ -98,8 +102,7 @@ func NewResolver(conf *config.Config) Resolver {
 		}
 		c.Remotes[remoteName] = rc
 
-		// Update local conf copy too if needed, but for now just save to disk
-		return c.Save()
+		return loader.Save(c)
 	}
 
 	return resolve

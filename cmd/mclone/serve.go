@@ -57,13 +57,14 @@ var serveCmd = &cobra.Command{
 		}
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-		conf, err := config.LoadConfig()
+		loader := config.LoaderFrom(cmd.Context())
+		conf, err := loader.Load()
 		if err != nil {
 			monitor.ReportError(cmd.Context(), err, "action", "load_config")
 			return
 		}
 
-		resolve := remote.NewResolver(conf)
+		resolve := remote.NewResolver(loader)
 		p, err := resolve.Provider(remoteName)
 		if err != nil {
 			monitor.ReportError(cmd.Context(), err, "action", "create_provider")

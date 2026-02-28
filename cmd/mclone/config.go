@@ -18,7 +18,7 @@ var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Manage remotes (interactive by default)",
 	Run: func(cmd *cobra.Command, args []string) {
-		interactiveConfig()
+		interactiveConfig(cmd.Context())
 	},
 }
 
@@ -30,10 +30,11 @@ func toAnyMap(m map[string]string) map[string]any {
 	return out
 }
 
-func interactiveConfig() {
+func interactiveConfig(ctx context.Context) {
+	loader := config.LoaderFrom(ctx)
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		conf, err := config.LoadConfig()
+		conf, err := loader.Load()
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
@@ -69,7 +70,7 @@ func interactiveConfig() {
 			name = strings.TrimSpace(name)
 			if _, ok := conf.Remotes[name]; ok {
 				delete(conf.Remotes, name)
-				if err := conf.Save(); err != nil {
+				if err := loader.Save(conf); err != nil {
 					fmt.Printf("Error saving config: %v\n", err)
 				}
 				fmt.Printf("Remote %q deleted.\n", name)
@@ -188,7 +189,7 @@ func interactiveConfig() {
 				Type:    selectedType,
 				Options: toAnyMap(options),
 			}
-			if err := conf.Save(); err != nil {
+			if err := loader.Save(conf); err != nil {
 				fmt.Printf("Error saving config: %v\n", err)
 			}
 			fmt.Printf("Remote %q added.\n", name)
@@ -201,7 +202,7 @@ func interactiveConfig() {
 					fmt.Println("Starting authentication flow...")
 
 					// Create a resolver linked to the config so UpdateOptions works
-					resolve := remote.NewResolver(conf)
+					resolve := remote.NewResolver(loader)
 
 					// Use resolve.Provider instead of NewProvider to ensure dependencies are injected
 					prov, err := resolve.Provider(name)
@@ -230,7 +231,8 @@ var configAddCmd = &cobra.Command{
 		name := args[0]
 		typeName := args[1]
 
-		conf, err := config.LoadConfig()
+		loader := config.LoaderFrom(cmd.Context())
+		conf, err := loader.Load()
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
@@ -244,7 +246,7 @@ var configAddCmd = &cobra.Command{
 		}
 
 		conf.Remotes[name] = rc
-		if err := conf.Save(); err != nil {
+		if err := loader.Save(conf); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
 			return
 		}

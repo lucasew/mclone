@@ -26,13 +26,7 @@ var chatCmd = &cobra.Command{
 		remoteName := parts[0]
 		modelName := strings.Join(parts[1:], ":")
 
-		conf, err := config.LoadConfig()
-		if err != nil {
-			fmt.Printf("Error loading config: %v\n", err)
-			return
-		}
-
-		resolve := remote.NewResolver(conf)
+		resolve := remote.NewResolver(config.LoaderFrom(cmd.Context()))
 		p, err := resolve.Provider(remoteName)
 		if err != nil {
 			fmt.Printf("Error creating provider: %v\n", err)

@@ -1,11 +1,29 @@
 package config
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/pelletier/go-toml/v2"
 )
+
+type contextKey struct{}
+
+// WithLoader stores a ConfigLoader in the context.
+func WithLoader(ctx context.Context, loader *ConfigLoader) context.Context {
+	return context.WithValue(ctx, contextKey{}, loader)
+}
+
+// LoaderFrom extracts the ConfigLoader from the context.
+func LoaderFrom(ctx context.Context) *ConfigLoader {
+	l, ok := ctx.Value(contextKey{}).(*ConfigLoader)
+	if !ok {
+		panic(fmt.Sprintf("config.LoaderFrom: no ConfigLoader in context"))
+	}
+	return l
+}
 
 type RemoteConfig struct {
 	Type    string         `toml:"type"`
