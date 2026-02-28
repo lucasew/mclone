@@ -7,15 +7,17 @@ import (
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/config"
+	"github.com/lucasew/mclone/pkg/tools"
 	"github.com/mitchellh/mapstructure"
 )
 
 type Factory func(name string, options map[string]any, resolve Resolver) (Provider, error)
 
-// Resolver provides access to both provider and searcher resolution.
+// Resolver provides access to provider, searcher, and tool source resolution.
 type Resolver struct {
 	Provider      func(remoteName string) (Provider, error)
 	Searcher      func(remoteName string) (Searcher, error)
+	ToolSource    func(toolName string) (tools.ToolSource, error)
 	UpdateOptions func(remoteName string, options map[string]any) error
 }
 
@@ -44,6 +46,7 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 
 	providerCache := make(map[string]Provider)
 	searcherCache := make(map[string]Searcher)
+	toolSourceCache := make(map[string]tools.ToolSource)
 
 	var resolve Resolver
 
@@ -79,6 +82,23 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 		}
 		searcherCache[remoteName] = s
 		return s, nil
+	}
+
+	resolve.ToolSource = func(toolName string) (tools.ToolSource, error) {
+		if ts, ok := toolSourceCache[toolName]; ok {
+			return ts, nil
+		}
+
+		tc, ok := conf.Tools[toolName]
+		if !ok {
+			return nil, fmt.Errorf("tool %q not found in config", toolName)
+		}
+		ts, err := tools.New(tc.Type, toolName, tc.Options)
+		if err != nil {
+			return nil, err
+		}
+		toolSourceCache[toolName] = ts
+		return ts, nil
 	}
 
 	resolve.UpdateOptions = func(remoteName string, options map[string]any) error {

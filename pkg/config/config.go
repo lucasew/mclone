@@ -30,8 +30,14 @@ type RemoteConfig struct {
 	Options map[string]any `toml:"options"`
 }
 
+type ToolConfig struct {
+	Type    string         `toml:"type"`
+	Options map[string]any `toml:"options"`
+}
+
 type Config struct {
 	Remotes map[string]RemoteConfig `toml:"remotes"`
+	Tools   map[string]ToolConfig   `toml:"tools"`
 }
 
 type ConfigLoader struct {
@@ -69,7 +75,10 @@ func (c *ConfigLoader) Load() (*Config, error) {
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &Config{Remotes: make(map[string]RemoteConfig)}, nil
+			return &Config{
+			Remotes: make(map[string]RemoteConfig),
+			Tools:   make(map[string]ToolConfig),
+		}, nil
 		}
 		return nil, err
 	}
