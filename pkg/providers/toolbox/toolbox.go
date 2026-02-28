@@ -153,7 +153,7 @@ func init() {
 			return nil, fmt.Errorf("toolbox requires 'provider' option")
 		}
 		if cfg.MaxLoops == 0 {
-			cfg.MaxLoops = 5
+			cfg.MaxLoops = 20
 		}
 
 		base, err := resolve.Provider(cfg.Provider)
