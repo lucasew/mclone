@@ -179,8 +179,16 @@ func init() {
 				return nil, fmt.Errorf("toolbox: failed to get tools from %q: %w", tn, err)
 			}
 			for _, t := range ts {
+				key := strings.ToLower(t.Definition.Name)
+				if existing, ok := toolMap[key]; ok {
+					slog.Warn("toolbox_tool_collision",
+						"tool", t.Definition.Name,
+						"source", tn,
+						"overrides", existing.Definition.Name,
+					)
+				}
 				allTools = append(allTools, t)
-				toolMap[strings.ToLower(t.Definition.Name)] = t
+				toolMap[key] = t
 			}
 		}
 

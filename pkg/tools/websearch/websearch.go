@@ -17,18 +17,20 @@ var searchToolSchema = json.RawMessage(`{"type":"object","properties":{"query":{
 type websearchSource struct {
 	searcher   remote.Searcher
 	maxResults int
+	toolName   string
 }
 
 type websearchConfig struct {
 	Searcher   string `mapstructure:"searcher"`
 	MaxResults int    `mapstructure:"max_results"`
+	ToolName   string `mapstructure:"tool_name"`
 }
 
 func (s *websearchSource) Tools(ctx context.Context) ([]tools.Tool, error) {
 	return []tools.Tool{{
 		Definition: message.ToolDefinition{
 			Type:        "function",
-			Name:        "WebSearch",
+			Name:        s.toolName,
 			Description: "Search the web for current information. Use this when you need up-to-date data or facts you're not sure about.",
 			Parameters:  searchToolSchema,
 		},
@@ -75,6 +77,10 @@ func init() {
 		if err != nil {
 			return nil, fmt.Errorf("websearch tool: unknown searcher %q: %w", cfg.Searcher, err)
 		}
-		return &websearchSource{searcher: searcher, maxResults: cfg.MaxResults}, nil
+		toolName := cfg.ToolName
+		if toolName == "" {
+			toolName = "WebSearch"
+		}
+		return &websearchSource{searcher: searcher, maxResults: cfg.MaxResults, toolName: toolName}, nil
 	})
 }

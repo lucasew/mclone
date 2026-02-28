@@ -35,18 +35,20 @@ type webfetchConfig struct {
 	Timeout      string `mapstructure:"timeout"`
 	MaxRedirects int    `mapstructure:"max_redirects"`
 	MaxBodySize  int64  `mapstructure:"max_body_size"`
+	ToolName     string `mapstructure:"tool_name"`
 }
 
 type webfetchSource struct {
 	client      *http.Client
 	maxBodySize int64
+	toolName    string
 }
 
 func (s *webfetchSource) Tools(ctx context.Context) ([]tools.Tool, error) {
 	return []tools.Tool{{
 		Definition: message.ToolDefinition{
 			Type:        "function",
-			Name:        "WebFetch",
+			Name:        s.toolName,
 			Description: "Fetch and parse the content of a web page/article. Use this to read external links provided by the user or found via search.",
 			Parameters:  webFetchToolSchema,
 		},
@@ -203,9 +205,15 @@ func init() {
 			maxBody = cfg.MaxBodySize
 		}
 
+		toolName := cfg.ToolName
+		if toolName == "" {
+			toolName = "WebFetch"
+		}
+
 		return &webfetchSource{
 			client:      newHTTPClient(timeout, maxRedirects),
 			maxBodySize: maxBody,
+			toolName:    toolName,
 		}, nil
 	})
 }
