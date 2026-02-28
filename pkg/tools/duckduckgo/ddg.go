@@ -1,4 +1,4 @@
-package ddg
+package duckduckgo
 
 import (
 	"context"
@@ -9,15 +9,54 @@ import (
 	"regexp"
 	"strings"
 
+	json "github.com/goccy/go-json"
+
+	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
+	"github.com/lucasew/mclone/pkg/tools"
 	"golang.org/x/net/html"
 )
 
-type DDGSearcher struct{}
+var (
+	urlRegex        = regexp.MustCompile(`uddg=([^&"]*)`)
+	searchToolSchema = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"The search query"}},"required":["query"]}`)
+)
 
-var urlRegex = regexp.MustCompile(`uddg=([^&"]*)`)
+type ddgConfig struct {
+	MaxResults int    `mapstructure:"max_results"`
+	ToolName   string `mapstructure:"tool_name"`
+}
 
-func (s *DDGSearcher) Search(ctx context.Context, query string, maxResults int) ([]remote.SearchResult, error) {
+type ddgSource struct {
+	maxResults int
+	toolName   string
+}
+
+func (s *ddgSource) Tools(ctx context.Context) ([]tools.Tool, error) {
+	return []tools.Tool{{
+		Definition: message.ToolDefinition{
+			Type:        "function",
+			Name:        s.toolName,
+			Description: "Search the web for current information using DuckDuckGo. Use this when you need up-to-date data or facts you're not sure about.",
+			Parameters:  searchToolSchema,
+		},
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			var a struct {
+				Query string `json:"query"`
+			}
+			if err := json.Unmarshal(args, &a); err != nil {
+				return "", err
+			}
+			results, err := search(ctx, a.Query, s.maxResults)
+			if err != nil {
+				return fmt.Sprintf("Search error: %v", err), nil
+			}
+			return formatResults(results), nil
+		},
+	}}, nil
+}
+
+func search(ctx context.Context, query string, maxResults int) ([]searchResult, error) {
 	searchURL := fmt.Sprintf("https://duckduckgo.com/html?q=%s", url.QueryEscape(query))
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
@@ -39,32 +78,26 @@ func (s *DDGSearcher) Search(ctx context.Context, query string, maxResults int) 
 	return parseResults(resp.Body, maxResults)
 }
 
-func parseResults(r io.Reader, maxResults int) ([]remote.SearchResult, error) {
+type searchResult struct {
+	Title   string
+	URL     string
+	Snippet string
+}
+
+func parseResults(r io.Reader, maxResults int) ([]searchResult, error) {
 	doc, err := html.Parse(r)
 	if err != nil {
 		return nil, err
 	}
 
-	var results []remote.SearchResult
+	var results []searchResult
 	var traverse func(*html.Node)
-
-	// We are looking for structure like:
-	// <div class="result">
-	//   <a class="result__a" href="...">Title</a>
-	//   <a class="result__snippet" href="...">Snippet</a>
-	// </div>
-	// But in the 'html' version (lite), it's more like:
-	// <div class="links_main links_deep result__body">
-	//   <a class="result__a" href="...">Title</a>
-	//   <a class="result__snippet" href="...">Snippet</a>
 
 	traverse = func(n *html.Node) {
 		if len(results) >= maxResults {
 			return
 		}
 
-		// Basic heuristic: look for <a> tags with class "result__a" (Title + Link)
-		// and verify if they have the 'uddg' param or are direct links
 		if n.Type == html.ElementNode && n.Data == "a" {
 			var className, href string
 			for _, a := range n.Attr {
@@ -77,31 +110,16 @@ func parseResults(r io.Reader, maxResults int) ([]remote.SearchResult, error) {
 			}
 
 			if strings.Contains(className, "result__a") {
-				// Found a potential result
 				title := extractText(n)
 				link := href
 
-				// Decode the uddg param if present
 				if matches := urlRegex.FindStringSubmatch(link); len(matches) > 1 {
 					if decoded, err := url.QueryUnescape(matches[1]); err == nil {
 						link = decoded
 					}
 				}
 
-				// Look for snippet in siblings
 				snippet := ""
-				// Traverse siblings to find snippet
-				// In lite HTML, snippet is often in a div with class "result__snippet"
-				// But let's just grab the next few text nodes or look for a specific class in siblings
-				// This is tricky without a full selector library like goquery or cascadia.
-				// However, I just added cascadia as a dependency of go-readability!
-				// I can import it? No, it's indirect.
-				// I'll use a simple sibling search.
-
-				// Basic implementation: just use title and link for now to match 'pesquisarr'
-				// 'pesquisarr' only extracted the link.
-
-				// To provide a snippet, let's search for the snippet element in the parent's children
 				if n.Parent != nil {
 					for c := n.Parent.FirstChild; c != nil; c = c.NextSibling {
 						if c.Type == html.ElementNode && c.Data == "a" {
@@ -116,7 +134,7 @@ func parseResults(r io.Reader, maxResults int) ([]remote.SearchResult, error) {
 				}
 
 				if link != "" && !strings.Contains(link, "duckduckgo.com/y.js") {
-					results = append(results, remote.SearchResult{
+					results = append(results, searchResult{
 						Title:   title,
 						URL:     link,
 						Snippet: snippet,
@@ -149,8 +167,30 @@ func extractText(n *html.Node) string {
 	return strings.TrimSpace(sb.String())
 }
 
+func formatResults(results []searchResult) string {
+	var sb strings.Builder
+	for i, r := range results {
+		if i > 0 {
+			sb.WriteString("\n\n")
+		}
+		fmt.Fprintf(&sb, "[%d] %s\n%s\n%s", i+1, r.Title, r.URL, r.Snippet)
+	}
+	return sb.String()
+}
+
 func init() {
-	remote.RegisterSearcher("ddg", func(name string, options map[string]any) (remote.Searcher, error) {
-		return &DDGSearcher{}, nil
+	tools.Register("duckduckgo", func(name string, options map[string]any) (tools.ToolSource, error) {
+		var cfg ddgConfig
+		if err := remote.DecodeOptions(options, &cfg); err != nil {
+			return nil, err
+		}
+		if cfg.MaxResults == 0 {
+			cfg.MaxResults = 5
+		}
+		toolName := cfg.ToolName
+		if toolName == "" {
+			toolName = "WebSearch"
+		}
+		return &ddgSource{maxResults: cfg.MaxResults, toolName: toolName}, nil
 	})
 }

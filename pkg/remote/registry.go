@@ -13,10 +13,9 @@ import (
 
 type Factory func(name string, options map[string]any, resolve Resolver) (Provider, error)
 
-// Resolver provides access to provider, searcher, and tool source resolution.
+// Resolver provides access to provider and tool source resolution.
 type Resolver struct {
 	Provider      func(remoteName string) (Provider, error)
-	Searcher      func(remoteName string) (Searcher, error)
 	ToolSource    func(toolName string) (tools.ToolSource, error)
 	UpdateOptions func(remoteName string, options map[string]any) error
 }
@@ -45,7 +44,6 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 	}
 
 	providerCache := make(map[string]Provider)
-	searcherCache := make(map[string]Searcher)
 	toolSourceCache := make(map[string]tools.ToolSource)
 
 	var resolve Resolver
@@ -61,27 +59,6 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 		}
 		providerCache[remoteName] = p
 		return p, nil
-	}
-
-	resolve.Searcher = func(remoteName string) (Searcher, error) {
-		if s, ok := searcherCache[remoteName]; ok {
-			return s, nil
-		}
-
-		rc, ok := conf.Remotes[remoteName]
-		if !ok {
-			return nil, fmt.Errorf("search remote %q not found", remoteName)
-		}
-		factory, ok := searchRegistry[rc.Type]
-		if !ok {
-			return nil, fmt.Errorf("unknown search type: %s", rc.Type)
-		}
-		s, err := factory(remoteName, rc.Options)
-		if err != nil {
-			return nil, err
-		}
-		searcherCache[remoteName] = s
-		return s, nil
 	}
 
 	resolve.ToolSource = func(toolName string) (tools.ToolSource, error) {
