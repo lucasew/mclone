@@ -7,18 +7,29 @@ svu = "3.3.0"
 
 [tasks.install]
 description = "Install dependencies"
-run = "go mod download"
+depends = ["install:*"]
+run = """
+#!/usr/bin/env bash
+if [ -f "go.mod" ]; then
+  go mod download
+elif [ -f "package.json" ]; then
+  npm install
+fi
+"""
 
 [tasks.codegen]
 description = "Update generated code"
+depends = ["codegen:*"]
 run = "go generate ./..."
 
 [tasks.test]
 description = "Run tests"
+depends = ["test:*"]
 run = "go test -v ./..."
 
 [tasks.build]
 description = "Build the binary"
+depends = ["build:*"]
 run = "go build -o mclone ./cmd/mclone"
 
 [tasks.lint]
@@ -31,7 +42,7 @@ run = "workspaced codebase format"
 
 [tasks.ci]
 description = "Run CI pipeline"
-depends = ["lint", "test", "build"]
+depends = ["lint", "test"]
 
 [tasks.release]
 description = "Run a release"
