@@ -3,7 +3,7 @@ name: "autorelease"
 on:
   push:
     branches:
-      - main
+      - "**"
     tags:
       - '*'
   pull_request:
