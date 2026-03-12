@@ -8,6 +8,9 @@ svu = "3.3.0"
 [tasks.install]
 description = "Install dependencies"
 depends = ["install:*"]
+
+[tasks."install:deps"]
+description = "Smartly detect the package manager and install dependencies"
 run = """
 #!/usr/bin/env bash
 if [ -f "go.mod" ]; then
@@ -20,16 +23,22 @@ fi
 [tasks.codegen]
 description = "Update generated code"
 depends = ["codegen:*"]
+
+[tasks."codegen:main"]
 run = "go generate ./..."
 
 [tasks.test]
 description = "Run tests"
 depends = ["test:*"]
+
+[tasks."test:main"]
 run = "go test -v ./..."
 
 [tasks.build]
 description = "Build the binary"
 depends = ["build:*"]
+
+[tasks."build:main"]
 run = "go build -o mclone ./cmd/mclone"
 
 [tasks.lint]
