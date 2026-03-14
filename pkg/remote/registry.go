@@ -11,21 +11,36 @@ import (
 	"github.com/mitchellh/mapstructure"
 )
 
+// Factory describes a constructor for creating an instance of a Provider.
+// It receives a unique remote name, its configuration options from the mclone.conf,
+// and a Resolver that can be used to construct nested or dependent components.
 type Factory func(name string, options map[string]any, resolve Resolver) (Provider, error)
 
 // Resolver provides access to provider and tool source resolution.
+// It acts as a dependency injector, allowing remotes like 'route' or 'search' to look up
+// other providers at runtime without maintaining direct references or circular dependencies.
 type Resolver struct {
+	// Provider fetches a fully-constructed Provider instance by its remote name.
 	Provider      func(remoteName string) (Provider, error)
+
+	// ToolSource fetches a configured tools.ToolSource by its name.
 	ToolSource    func(toolName string) (tools.ToolSource, error)
+
+	// UpdateOptions persists configuration updates to the backing storage.
 	UpdateOptions func(remoteName string, options map[string]any) error
 }
 
+// registry is the global map of provider types to their respective factories.
 var registry = make(map[string]Factory)
 
+// Register registers a new Provider Factory against a specific type name.
+// This is typically called within init() functions in individual provider packages.
 func Register(typeName string, factory Factory) {
 	registry[typeName] = factory
 }
 
+// ListTypes returns a list of all registered provider types.
+// This is primarily used for interactive CLI prompts when creating a new remote.
 func ListTypes() []string {
 	var types []string
 	for t := range registry {
@@ -105,6 +120,9 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 	return resolve
 }
 
+// resolveOne implements the underlying lookup and instantiation logic for Resolver.Provider.
+// It first attempts an exact match of the given remoteName in the configuration. If that fails
+// and the name matches a prefix in the format "name:*", it attempts an implicit balance group resolution.
 func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provider, error) {
 	rc, exactMatch := conf.Remotes[remoteName]
 
@@ -166,6 +184,8 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 	return factory(remoteName, opts, resolve)
 }
 
+// NewProvider constructs a new Provider of the given type, bypassing the config loader.
+// It is intended for testing or isolated instantiations where a full Resolver is unnecessary.
 func NewProvider(typeName string, name string, options map[string]any) (Provider, error) {
 	factory, ok := registry[typeName]
 	if !ok {
