@@ -193,6 +193,8 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 
 		// Parse SSE stream
 		reader := bufio.NewReader(resp.Body)
+		toolCallsBuffer := make(map[int]*message.ToolCall)
+		var toolCallOrder []int
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
@@ -247,23 +249,52 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 			}
 
 			for _, cand := range candidates {
-				for _, part := range cand.Content.Parts {
+				for i, part := range cand.Content.Parts {
 					if part.Text != "" {
 						out <- message.TextDelta{Text: part.Text}
 					}
 					if part.FunctionCall != nil {
-						// Convert args to JSON bytes for ToolCall
-						argsBytes, _ := json.Marshal(part.FunctionCall.Args)
-						out <- message.ToolCallFinished{
-							Call: message.ToolCall{
-								ID:        "call_" + generateRandomString(8), // Gemini doesn't always send ID in stream?
-								Name:      part.FunctionCall.Name,
-								Arguments: json.RawMessage(argsBytes),
-							},
+						tc, ok := toolCallsBuffer[i]
+						if !ok {
+							tc = &message.ToolCall{
+								ID:   fmt.Sprintf("toolu_oauth_%d_%d", time.Now().UnixNano()%1000000, i),
+								Name: part.FunctionCall.Name,
+							}
+							toolCallsBuffer[i] = tc
+							toolCallOrder = append(toolCallOrder, i)
+						}
+						if part.FunctionCall.Name != "" {
+							tc.Name = part.FunctionCall.Name
+						}
+
+						if len(part.FunctionCall.Args) > 0 {
+							currentArgs := make(map[string]interface{})
+							if len(tc.Arguments) > 0 {
+								if err := json.Unmarshal(tc.Arguments, &currentArgs); err != nil {
+									monitor.ReportError(ctx, err, "action", "geminioauth_arg_merge_error")
+								}
+							}
+							for k, v := range part.FunctionCall.Args {
+								currentArgs[k] = v
+							}
+							argsBytes, err := json.Marshal(currentArgs)
+							if err != nil {
+								monitor.ReportError(ctx, err, "action", "geminioauth_arg_marshal_error")
+							} else {
+								tc.Arguments = json.RawMessage(argsBytes)
+							}
 						}
 					}
 				}
 			}
+		}
+
+		if len(toolCallOrder) > 0 {
+			for _, idx := range toolCallOrder {
+				out <- message.ToolCallFinished{Call: *toolCallsBuffer[idx]}
+			}
+			out <- message.ResponseCompleted{Reason: message.StopReasonToolCall}
+			return
 		}
 
 		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
