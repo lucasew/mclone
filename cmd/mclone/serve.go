@@ -190,17 +190,17 @@ func parseMessages(ctx context.Context, req chatRequest) []message.Turn {
 			systemText = strings.Join(parts, "\n")
 		}
 		if systemText != "" {
-			msgs = append(msgs, message.Turn(message.TextParts(message.RoleSystem, systemText)))
+			msgs = append(msgs, message.TextTurn(message.RoleSystem, systemText))
 		}
 	}
 
 	for i, m := range req.Messages {
-		msg, err := m.ToMessage()
+		msg, err := m.ToTurn()
 		if err != nil {
 			monitor.ReportError(ctx, err, "action", "convert_message", "index", i)
 			continue
 		}
-		msgs = append(msgs, message.Turn(msg))
+		msgs = append(msgs, msg)
 	}
 
 	return msgs

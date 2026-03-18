@@ -49,7 +49,7 @@ var chatCmd = &cobra.Command{
 				break
 			}
 
-			messages = append(messages, message.Turn(message.TextParts(message.RoleUser, input)))
+			messages = append(messages, message.TextTurn(message.RoleUser, input))
 
 			respChan, err := p.Chat(ctx, message.Request{
 				Model:   modelName,
@@ -73,7 +73,7 @@ var chatCmd = &cobra.Command{
 			}
 			fmt.Println()
 
-			messages = append(messages, message.Turn(message.TextParts(message.RoleAssistant, fullResponse.String())))
+			messages = append(messages, message.TextTurn(message.RoleAssistant, fullResponse.String()))
 		}
 	},
 }
