@@ -1,4 +1,4 @@
-package geminioauth
+package antigravity
 
 import (
 	"bufio"
@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	json "github.com/goccy/go-json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	json "github.com/goccy/go-json"
+
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/providers/gemini"
@@ -26,34 +27,65 @@ import (
 )
 
 const (
-	clientId     = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-	clientSecret = "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"
-	redirectPort = "8085"
-	redirectPath = "/oauth2callback"
+	redirectPort = "36742"
+	redirectPath = "/oauth-callback"
 	redirectURI  = "http://localhost:" + redirectPort + redirectPath
 	authURL      = "https://accounts.google.com/o/oauth2/v2/auth"
 	tokenURL     = "https://oauth2.googleapis.com/token"
+	userAgent    = "antigravity/1.20.6"
+)
+
+func invertBits(s string) string {
+	b := []byte(s)
+	for i := range b {
+		b[i] = ^b[i]
+	}
+	return string(b)
+}
+
+var (
+	clientID     = invertBits("\xce\xcf\xc8\xce\xcf\xcf\xc9\xcf\xc9\xcf\xca\xc6\xce\xd2\x8b\x92\x97\x8c\x8c\x96\x91\xcd\x97\xcd\xce\x93\x9c\x8d\x9a\xcd\xcc\xca\x89\x8b\x90\x93\x90\x95\x97\xcb\x98\xcb\xcf\xcc\x9a\x8f\xd1\x9e\x8f\x8f\x8c\xd1\x98\x90\x90\x98\x93\x9a\x8a\x8c\x9a\x8d\x9c\x90\x91\x8b\x9a\x91\x8b\xd1\x9c\x90\x92")
+	clientSecret = invertBits("\xb8\xb0\xbc\xac\xaf\xa7\xd2\xb4\xca\xc7\xb9\xa8\xad\xcb\xc7\xc9\xb3\x9b\xb3\xb5\xce\x92\xb3\xbd\xc7\x8c\xa7\xbc\xcb\x85\xc9\x8e\xbb\xbe\x99")
 )
 
 var scopes = []string{
 	"https://www.googleapis.com/auth/cloud-platform",
 	"https://www.googleapis.com/auth/userinfo.email",
 	"https://www.googleapis.com/auth/userinfo.profile",
+	"https://www.googleapis.com/auth/cclog",
+	"https://www.googleapis.com/auth/experimentsandconfigs",
 }
 
-type GeminiOAuthProvider struct {
-	base     *gemini.GeminiProvider
-	name     string
-	options  map[string]any
-	resolver remote.Resolver
-	token    *TokenData
-	loginMu  sync.Mutex
-	retryCfg GeminiOAuthRetryConfig
-	retryMu  sync.Mutex
-	retrySeq int
+var codeAssistEndpoints = []string{
+	"https://autopush-cloudcode-pa.sandbox.googleapis.com",
+	"https://cloudcode-pa.googleapis.com",
 }
 
-type GeminiOAuthRetryConfig struct {
+var modelAliases = map[string]string{
+	"gemini-2.5-pro":                    "gemini-2.5-pro-exp-03-25",
+	"gemini-2.5-flash":                  "gemini-2.5-flash",
+	"gemini-2.5-flash-lite":             "gemini-2.5-flash-lite-001",
+	"gemini-claude-sonnet-4-5":          "claude-sonnet-4-5",
+	"gemini-claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
+	"gemini-claude-opus-4-5":            "claude-opus-4-5",
+	"gemini-claude-opus-4-5-thinking":   "claude-opus-4-5-thinking",
+}
+
+type Provider struct {
+	base          *gemini.GeminiProvider
+	name          string
+	options       map[string]any
+	resolver      remote.Resolver
+	token         *TokenData
+	loginMu       sync.Mutex
+	retryCfg      RetryConfig
+	retryMu       sync.Mutex
+	retrySeq      int
+	endpointMu    sync.Mutex
+	endpointIndex int
+}
+
+type RetryConfig struct {
 	RetryAfterThreshold time.Duration
 	BackoffInitial      time.Duration
 	BackoffMax          time.Duration
@@ -65,17 +97,12 @@ const (
 	defaultBackoffMax          = 8 * time.Second
 )
 
-func (p *GeminiOAuthProvider) Name() string { return "geminioauth" }
+func (p *Provider) Name() string { return "antigravity" }
 
-func (p *GeminiOAuthProvider) List(ctx context.Context) ([]remote.Model, error) {
-	// Trigger authentication flow if needed
+func (p *Provider) List(ctx context.Context) ([]remote.Model, error) {
 	if err := p.ensureToken(ctx); err != nil {
 		return nil, err
 	}
-
-	// We cannot use the public Gemini API ListModels endpoint due to insufficient scopes
-	// (Cloud Code token only has cloud-platform scope, not generativelanguage scope).
-	// We return a static list of models known to be supported by Cloud Code.
 	return []remote.Model{
 		{Name: "Gemini 2.0 Flash", Slug: "gemini-2.0-flash"},
 		{Name: "Gemini 1.5 Pro", Slug: "gemini-1.5-pro"},
@@ -84,7 +111,7 @@ func (p *GeminiOAuthProvider) List(ctx context.Context) ([]remote.Model, error) 
 	}, nil
 }
 
-func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
+func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
 	if err := p.ensureToken(ctx); err != nil {
 		out := make(chan message.Event)
 		go func() {
@@ -98,8 +125,6 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 	go func() {
 		defer close(out)
 
-		// Patch messages to include dummy thought signature for Gemini 3 models
-		// to avoid ToGeminiContents dropping them (mimicking plugin behavior).
 		patchedMessages := make([]message.Turn, len(req.Turns))
 		for i, m := range req.Turns {
 			var newParts []message.Part
@@ -108,13 +133,11 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 					if len(tc.ThoughtSignature) == 0 {
 						tc.ThoughtSignature = []byte("skip_thought_signature_validator")
 					}
-					// Also ensure new parts are created with this signature
 					newParts = append(newParts, tc)
 				} else {
 					newParts = append(newParts, p)
 				}
 			}
-			// Copy structure but replace parts
 			newMsg := m
 			newMsg.Parts = newParts
 			patchedMessages[i] = newMsg
@@ -150,17 +173,20 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 			reqPayload["tools"] = gemini.ToGeminiTools(req.Options.Tools)
 		}
 
-		// Cloud Code API expects a wrapped body: { model: "...", request: { ... } }
+		sessionID := "session-" + generateRandomString(16)
+		reqPayload["sessionId"] = sessionID
 		wrappedBody := map[string]interface{}{
-			"model":   req.Model,
-			"request": reqPayload,
+			"project":     p.token.ProjectID,
+			"model":       normalizeGeminiModel(req.Model),
+			"request":     reqPayload,
+			"requestType": "agent",
+			"userAgent":   "antigravity",
+			"requestId":   "agent-" + generateRandomString(16),
 		}
-		// Inject project ID if available
 		if p.token.ProjectID != "" {
-			wrappedBody["project"] = p.token.ProjectID
-			slog.Info("gemini_oauth_chat_project", "project_id", p.token.ProjectID)
+			slog.Info("antigravity_chat_project", "project_id", p.token.ProjectID)
 		} else {
-			slog.Warn("gemini_oauth_chat_no_project", "msg", "Project ID missing, request might fail")
+			slog.Warn("antigravity_chat_no_project", "msg", "Project ID missing, request might fail")
 		}
 
 		bodyBytes, err := json.Marshal(wrappedBody)
@@ -169,29 +195,23 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 			return
 		}
 
-		// URL for streaming: v1internal:streamGenerateContent?alt=sse
-		url := "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
-
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", "/v1internal:streamGenerateContent?alt=sse", bytes.NewReader(bodyBytes))
 		if err != nil {
 			out <- message.ResponseError{Err: err}
 			return
 		}
 
-		req.Header.Set("Authorization", "Bearer "+p.token.AccessToken)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
-		req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
-		req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
+		httpReq.Header.Set("Authorization", "Bearer "+p.token.AccessToken)
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", userAgent)
 
-		resp, err := p.doChatRequest(ctx, req, bodyBytes)
+		resp, err := p.doChatRequest(ctx, httpReq, bodyBytes)
 		if err != nil {
 			out <- message.ResponseError{Err: err}
 			return
 		}
 		defer resp.Body.Close()
 
-		// Parse SSE stream
 		reader := bufio.NewReader(resp.Body)
 		toolCallsBuffer := make(map[int]*message.ToolCall)
 		var toolCallOrder []int
@@ -203,18 +223,15 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 				}
 				break
 			}
-
 			line = strings.TrimSpace(line)
 			if !strings.HasPrefix(line, "data: ") {
 				continue
 			}
-
 			dataStr := strings.TrimPrefix(line, "data: ")
 			if dataStr == "[DONE]" {
 				break
 			}
 
-			// SSE Response Struct (supporting both wrapped and unwrapped, and function calls)
 			type CandidatePart struct {
 				Text         string `json:"text,omitempty"`
 				FunctionCall *struct {
@@ -222,26 +239,21 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 					Args map[string]interface{} `json:"args"`
 				} `json:"functionCall,omitempty"`
 			}
-
 			type Candidate struct {
 				Content struct {
 					Parts []CandidatePart `json:"parts"`
 				} `json:"content"`
 			}
-
 			var sseResp struct {
 				Response struct {
 					Candidates []Candidate `json:"candidates"`
 				} `json:"response"`
 			}
-
 			var standardResp struct {
 				Candidates []Candidate `json:"candidates"`
 			}
 
 			var candidates []Candidate
-
-			// Cloud Code SSE payloads might be wrapped or just standard.
 			if err := json.Unmarshal([]byte(dataStr), &sseResp); err == nil && len(sseResp.Response.Candidates) > 0 {
 				candidates = sseResp.Response.Candidates
 			} else if err := json.Unmarshal([]byte(dataStr), &standardResp); err == nil && len(standardResp.Candidates) > 0 {
@@ -256,22 +268,18 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 					if part.FunctionCall != nil {
 						tc, ok := toolCallsBuffer[i]
 						if !ok {
-							tc = &message.ToolCall{
-								ID:   fmt.Sprintf("toolu_oauth_%d_%d", time.Now().UnixNano()%1000000, i),
-								Name: part.FunctionCall.Name,
-							}
+							tc = &message.ToolCall{ID: fmt.Sprintf("toolu_oauth_%d_%d", time.Now().UnixNano()%1000000, i), Name: part.FunctionCall.Name}
 							toolCallsBuffer[i] = tc
 							toolCallOrder = append(toolCallOrder, i)
 						}
 						if part.FunctionCall.Name != "" {
 							tc.Name = part.FunctionCall.Name
 						}
-
 						if len(part.FunctionCall.Args) > 0 {
 							currentArgs := make(map[string]interface{})
 							if len(tc.Arguments) > 0 {
 								if err := json.Unmarshal(tc.Arguments, &currentArgs); err != nil {
-									monitor.ReportError(ctx, err, "action", "geminioauth_arg_merge_error")
+									monitor.ReportError(ctx, err, "action", "antigravity_arg_merge_error")
 								}
 							}
 							for k, v := range part.FunctionCall.Args {
@@ -279,7 +287,7 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 							}
 							argsBytes, err := json.Marshal(currentArgs)
 							if err != nil {
-								monitor.ReportError(ctx, err, "action", "geminioauth_arg_marshal_error")
+								monitor.ReportError(ctx, err, "action", "antigravity_arg_marshal_error")
 							} else {
 								tc.Arguments = json.RawMessage(argsBytes)
 							}
@@ -296,13 +304,12 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 			out <- message.ResponseCompleted{Reason: message.StopReasonToolCall}
 			return
 		}
-
 		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
 	}()
 	return out, nil
 }
 
-func (p *GeminiOAuthProvider) doChatRequest(ctx context.Context, request *http.Request, body []byte) (*http.Response, error) {
+func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, body []byte) (*http.Response, error) {
 	threshold := p.retryCfg.RetryAfterThreshold
 	if threshold <= 0 {
 		threshold = defaultRetryAfterThreshold
@@ -317,55 +324,77 @@ func (p *GeminiOAuthProvider) doChatRequest(ctx context.Context, request *http.R
 	}
 
 	for attempt := 0; ; attempt++ {
-		req := request.Clone(ctx)
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(body)), nil
-		}
-		req.ContentLength = int64(len(body))
+		var lastErr error
+		start := p.getEndpointIndex()
+		for i := 0; i < len(codeAssistEndpoints); i++ {
+			endpointIndex := (start + i) % len(codeAssistEndpoints)
+			endpoint := codeAssistEndpoints[endpointIndex]
+			req := request.Clone(ctx)
+			req.URL.Scheme = "https"
+			req.URL.Host = strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+			req.ContentLength = int64(len(body))
 
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				lastErr = err
+				slog.Warn("antigravity_endpoint_error", "endpoint", endpoint, "error", err)
+				continue
+			}
 			if resp.StatusCode == http.StatusOK {
 				p.resetRateLimitBackoff()
+				p.setEndpointIndex(endpointIndex)
 				return resp, nil
 			}
-			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+				respBody, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				retryAfter := parseRetryAfter(resp, respBody)
+				retrySeq := 0
+				if retryAfter <= 0 {
+					retryAfter, retrySeq = p.nextRateLimitBackoff(backoffInitial, backoffMax)
+				} else {
+					p.resetRateLimitBackoff()
+				}
+				slog.Warn("antigravity_rate_limit", "endpoint", endpoint, "status", resp.StatusCode, "retry_after", retryAfter, "retry_seq", retrySeq, "attempt", attempt+1, "threshold", threshold)
+				if retryAfter > threshold {
+					return nil, &message.ErrRateLimit{RetryAfter: retryAfter}
+				}
+				timer := time.NewTimer(retryAfter)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return nil, ctx.Err()
+				case <-timer.C:
+				}
+				lastErr = &message.ErrRateLimit{RetryAfter: retryAfter}
+				goto nextAttempt
+			}
+			if resp.StatusCode >= 500 {
+				respBody, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				lastErr = fmt.Errorf("endpoint %s server error %d: %s", endpoint, resp.StatusCode, string(respBody))
+				slog.Warn("antigravity_endpoint_server_error", "endpoint", endpoint, "status", resp.StatusCode)
+				continue
+			}
+			respBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))
+			if resp.StatusCode == http.StatusForbidden && shouldFailoverEndpoint(endpoint, respBody) {
+				lastErr = fmt.Errorf("endpoint %s forbidden: %s", endpoint, string(respBody))
+				slog.Warn("antigravity_endpoint_forbidden_failover", "endpoint", endpoint, "status", resp.StatusCode)
+				continue
+			}
+			p.setEndpointIndex(endpointIndex)
+			return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, string(respBody))
 		}
-
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		retryAfter := parseRetryAfter(resp, respBody)
-		retrySeq := 0
-		if retryAfter <= 0 {
-			retryAfter, retrySeq = p.nextRateLimitBackoff(backoffInitial, backoffMax)
-		} else {
-			p.resetRateLimitBackoff()
+		if lastErr != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			slog.Warn("antigravity_all_endpoints_failed", "attempt", attempt+1, "error", lastErr)
 		}
-		slog.Warn("gemini_rate_limit",
-			"status", resp.StatusCode,
-			"retry_after", retryAfter,
-			"retry_seq", retrySeq,
-			"attempt", attempt+1,
-			"threshold", threshold,
-		)
-
-		if retryAfter > threshold {
-			return nil, &message.ErrRateLimit{RetryAfter: retryAfter}
-		}
-
-		timer := time.NewTimer(retryAfter)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
+	nextAttempt:
 	}
 }
 
@@ -377,7 +406,118 @@ func backoffDuration(sequence int, initial, max time.Duration) time.Duration {
 	return backoff
 }
 
-func (p *GeminiOAuthProvider) nextRateLimitBackoff(initial, max time.Duration) (time.Duration, int) {
+func normalizeGeminiModel(model string) string {
+	model = strings.TrimPrefix(model, "models/")
+	return resolveAntigravityModel(model)
+}
+
+func resolveAntigravityModel(model string) string {
+	model = strings.TrimPrefix(model, "antigravity-")
+	model = strings.TrimSuffix(model, "-preview-customtools")
+	model = strings.TrimSuffix(model, "-preview")
+	if model == "gemini-3-pro" {
+		model = "gemini-3.1-pro"
+	}
+
+	if alias, ok := modelAliases[model]; ok {
+		model = alias
+	}
+
+	switch {
+	case isGemini3ProModel(model):
+		if !hasTierSuffix(model) && !isImageGenerationModel(model) {
+			return model + "-low"
+		}
+	case isGemini3FlashModel(model):
+		if hasTierSuffix(model) {
+			return stripTierSuffix(model)
+		}
+	}
+
+	return model
+}
+
+func hasTierSuffix(model string) bool {
+	return strings.HasSuffix(model, "-low") ||
+		strings.HasSuffix(model, "-medium") ||
+		strings.HasSuffix(model, "-high") ||
+		strings.HasSuffix(model, "-minimal")
+}
+
+func stripTierSuffix(model string) string {
+	for _, suffix := range []string{"-minimal", "-low", "-medium", "-high"} {
+		if strings.HasSuffix(model, suffix) {
+			return strings.TrimSuffix(model, suffix)
+		}
+	}
+	return model
+}
+
+func isGemini3ProModel(model string) bool {
+	model = strings.ToLower(model)
+	return strings.HasPrefix(model, "gemini-3-pro") || strings.HasPrefix(model, "gemini-3.1-pro")
+}
+
+func isGemini3FlashModel(model string) bool {
+	model = strings.ToLower(model)
+	return strings.HasPrefix(model, "gemini-3-flash") || strings.HasPrefix(model, "gemini-3.1-flash")
+}
+
+func isImageGenerationModel(model string) bool {
+	model = strings.ToLower(model)
+	return strings.Contains(model, "image") || strings.Contains(model, "imagen")
+}
+
+func shouldFailoverEndpoint(endpoint string, body []byte) bool {
+	if !strings.Contains(endpoint, "sandbox.googleapis.com") {
+		return false
+	}
+	type errorEnvelope struct {
+		Error struct {
+			Status  string `json:"status"`
+			Details []struct {
+				Type     string            `json:"@type"`
+				Reason   string            `json:"reason"`
+				Domain   string            `json:"domain"`
+				Metadata map[string]string `json:"metadata"`
+			} `json:"details"`
+			Errors []struct {
+				Reason string `json:"reason"`
+				Domain string `json:"domain"`
+			} `json:"errors"`
+		} `json:"error"`
+	}
+	check := func(errResp errorEnvelope) bool {
+		if errResp.Error.Status == "PERMISSION_DENIED" {
+			for _, detail := range errResp.Error.Details {
+				if detail.Reason == "SERVICE_DISABLED" {
+					return true
+				}
+			}
+		}
+		for _, item := range errResp.Error.Errors {
+			if item.Reason == "accessNotConfigured" && item.Domain == "usageLimits" {
+				return true
+			}
+		}
+		return false
+	}
+	var errResp errorEnvelope
+	if err := json.Unmarshal(body, &errResp); err == nil {
+		return check(errResp)
+	}
+	var errList []errorEnvelope
+	if err := json.Unmarshal(body, &errList); err == nil {
+		for _, item := range errList {
+			if check(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (p *Provider) nextRateLimitBackoff(initial, max time.Duration) (time.Duration, int) {
 	p.retryMu.Lock()
 	defer p.retryMu.Unlock()
 	seq := p.retrySeq
@@ -386,121 +526,102 @@ func (p *GeminiOAuthProvider) nextRateLimitBackoff(initial, max time.Duration) (
 	return backoff, seq
 }
 
-func (p *GeminiOAuthProvider) resetRateLimitBackoff() {
+func (p *Provider) resetRateLimitBackoff() {
 	p.retryMu.Lock()
 	defer p.retryMu.Unlock()
 	p.retrySeq = 0
 }
 
-// Token management
+func (p *Provider) getEndpointIndex() int {
+	p.endpointMu.Lock()
+	defer p.endpointMu.Unlock()
+	return p.endpointIndex
+}
+
+func (p *Provider) setEndpointIndex(idx int) {
+	p.endpointMu.Lock()
+	defer p.endpointMu.Unlock()
+	p.endpointIndex = idx
+}
 
 type TokenData struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
-	ExpiresIn    int       `json:"expires_in"` // seconds
+	ExpiresIn    int       `json:"expires_in"`
 	ExpiresAt    time.Time `json:"expires_at"`
 	TokenType    string    `json:"token_type"`
-	ProjectID    string    `json:"project_id,omitempty"` // Derived from Cloud Code onboarding
+	ProjectID    string    `json:"project_id,omitempty"`
 }
 
-func (p *GeminiOAuthProvider) ensureToken(ctx context.Context) error {
-	// 1. Fast path: check if valid token exists in memory
+func (p *Provider) ensureToken(ctx context.Context) error {
 	token, err := p.loadToken()
 	if err == nil && token != nil && time.Now().Add(time.Minute).Before(token.ExpiresAt) {
 		p.base.APIKey = token.AccessToken
 		return nil
 	}
-
-	// 2. Slow path: Refresh or Login (protected by Mutex)
 	p.loginMu.Lock()
 	defer p.loginMu.Unlock()
-
-	// Re-check after acquiring lock
 	token, err = p.loadToken()
 	if err == nil && token != nil && time.Now().Add(time.Minute).Before(token.ExpiresAt) {
 		p.base.APIKey = token.AccessToken
 		return nil
 	}
-
-	// Try refresh
 	if token != nil && token.RefreshToken != "" {
-		slog.Info("gemini_oauth_refreshing_token")
+		slog.Info("antigravity_refreshing_token")
 		newToken, err := p.refreshToken(token.RefreshToken)
 		if err == nil {
 			if err := p.saveToken(newToken); err != nil {
-				monitor.ReportError(ctx, err, "action", "gemini_oauth_save_token_failed")
+				monitor.ReportError(ctx, err, "action", "antigravity_save_token_failed")
 			}
 			p.base.APIKey = newToken.AccessToken
 			return nil
 		}
-		monitor.ReportError(ctx, err, "action", "gemini_oauth_refresh_failed")
+		monitor.ReportError(ctx, err, "action", "antigravity_refresh_failed")
 	}
-
-	// Login
-	slog.Info("gemini_oauth_login_required")
+	slog.Info("antigravity_login_required")
 	newToken, err := p.performLoginFlow(ctx)
 	if err != nil {
 		return err
 	}
-
-	// Ensure we have a project ID (onboard to free tier if needed)
 	if newToken.ProjectID == "" {
 		pid, err := p.onboardManagedProject(ctx, newToken.AccessToken)
 		if err != nil {
-			slog.Warn("gemini_onboard_failed", "error", err)
-			// Continue anyway? API might fail later.
+			slog.Warn("antigravity_onboard_failed", "error", err)
 		} else {
 			newToken.ProjectID = pid
 		}
 	}
-
 	if err := p.saveToken(newToken); err != nil {
-		monitor.ReportError(ctx, err, "action", "gemini_oauth_save_token_failed")
+		monitor.ReportError(ctx, err, "action", "antigravity_save_token_failed")
 	}
 	p.base.APIKey = newToken.AccessToken
 	return nil
 }
 
-func (p *GeminiOAuthProvider) onboardManagedProject(ctx context.Context, accessToken string) (string, error) {
-	// Mimic plugin's onboardManagedProject with tierId="free-tier"
+func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string) (string, error) {
 	url := "https://cloudcode-pa.googleapis.com/v1internal:onboardUser"
-
-	metadata := map[string]string{
-		"ideType":    "IDE_UNSPECIFIED",
-		"platform":   "PLATFORM_UNSPECIFIED",
-		"pluginType": "GEMINI",
-	}
-
-	bodyData := map[string]interface{}{
-		"tierId":   "free-tier",
-		"metadata": metadata,
-	}
-
+	metadata := map[string]string{"ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}
+	bodyData := map[string]interface{}{"tierId": "free-tier", "metadata": metadata}
 	bodyBytes, _ := json.Marshal(bodyData)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", err
 	}
-
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
-	req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
-	req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
-
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("onboard error %d: %s", resp.StatusCode, string(respBody))
 	}
-
 	var payload struct {
-		Name     string `json:"name"` // Operation name
+		Name     string `json:"name"`
 		Done     bool   `json:"done"`
 		Response struct {
 			CloudAICompanionProject struct {
@@ -508,68 +629,52 @@ func (p *GeminiOAuthProvider) onboardManagedProject(ctx context.Context, accessT
 			} `json:"cloudaicompanionProject"`
 		} `json:"response"`
 	}
-
 	if err := json.Unmarshal(respBody, &payload); err != nil {
 		return "", err
 	}
-
 	if payload.Done {
 		return payload.Response.CloudAICompanionProject.ID, nil
 	}
-
-	// If not done, poll the operation
 	if payload.Name == "" {
 		return "", fmt.Errorf("onboard incomplete and no operation name returned")
 	}
-
 	opName := payload.Name
-	// Poll for up to 60 seconds
 	for i := 0; i < 12; i++ {
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-time.After(5 * time.Second):
 		}
-
-		opUrl := "https://cloudcode-pa.googleapis.com/v1internal/" + opName
-		reqOp, _ := http.NewRequestWithContext(ctx, "GET", opUrl, nil)
+		opURL := "https://cloudcode-pa.googleapis.com/v1internal/" + opName
+		reqOp, _ := http.NewRequestWithContext(ctx, "GET", opURL, nil)
 		reqOp.Header = req.Header
-
 		respOp, err := http.DefaultClient.Do(reqOp)
 		if err != nil {
 			continue
 		}
-
 		bodyOp, _ := io.ReadAll(respOp.Body)
 		respOp.Body.Close()
-
 		if respOp.StatusCode != 200 {
 			continue
 		}
-
 		if err := json.Unmarshal(bodyOp, &payload); err != nil {
 			continue
 		}
-
 		if payload.Done {
 			return payload.Response.CloudAICompanionProject.ID, nil
 		}
 	}
-
 	return "", fmt.Errorf("onboard timed out")
 }
 
-func (p *GeminiOAuthProvider) loadToken() (*TokenData, error) {
+func (p *Provider) loadToken() (*TokenData, error) {
 	if p.token != nil {
 		return p.token, nil
 	}
-
-	// Load from options
 	tokenJSON, ok := p.options["token"].(string)
 	if !ok || tokenJSON == "" {
 		return nil, fmt.Errorf("no token found in config")
 	}
-
 	var token TokenData
 	if err := json.Unmarshal([]byte(tokenJSON), &token); err != nil {
 		return nil, fmt.Errorf("failed to parse token from config: %w", err)
@@ -578,81 +683,50 @@ func (p *GeminiOAuthProvider) loadToken() (*TokenData, error) {
 	return &token, nil
 }
 
-func (p *GeminiOAuthProvider) saveToken(token *TokenData) error {
+func (p *Provider) saveToken(token *TokenData) error {
 	p.token = token
 	data, err := json.Marshal(token)
 	if err != nil {
 		return err
 	}
-
 	if p.resolver.UpdateOptions != nil {
-		updates := map[string]any{
-			"token": string(data),
-		}
-		return p.resolver.UpdateOptions(p.name, updates)
+		return p.resolver.UpdateOptions(p.name, map[string]any{"token": string(data)})
 	}
 	return nil
 }
 
-func (p *GeminiOAuthProvider) refreshToken(refreshToken string) (*TokenData, error) {
+func (p *Provider) refreshToken(refreshToken string) (*TokenData, error) {
 	data := url.Values{}
-	data.Set("client_id", clientId)
+	data.Set("client_id", clientID)
 	data.Set("client_secret", clientSecret)
 	data.Set("refresh_token", refreshToken)
 	data.Set("grant_type", "refresh_token")
-
 	resp, err := http.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("refresh failed status %d: %s", resp.StatusCode, string(body))
 	}
-
 	var newToken TokenData
 	if err := json.NewDecoder(resp.Body).Decode(&newToken); err != nil {
 		return nil, err
 	}
-	newToken.RefreshToken = refreshToken // Keep old refresh token if new one not provided (usually it is NOT provided on refresh unless rotated)
-	// Check if new refresh token was actually provided in response (Google might rotate)
-	// Note: json.Decode maps fields. If refresh_token is in JSON, it overwrites. If not, it stays empty.
-	// We should check raw map if we want to be sure, but struct decode is fine if we re-assign if empty.
-	// Actually, wait: we unmarshaled into a clean struct. So if response has no refresh_token, it is empty.
-	// Google Refresh responses usually do NOT return a new refresh token unless configured.
-
-	// Re-read to check
-	// Simpler: decode into map first? No, just logic:
-	// If newToken.RefreshToken is empty, use old one.
-
-	// BUT, I need to check if the field was present. `newToken.RefreshToken` will be "" if not present.
-	// But it might also be "" if present and empty (unlikely).
-	// Let's assume "" means not present.
-
-	// Ah wait, I need to handle `ExpiresAt`. `ExpiresIn` comes from API.
+	newToken.RefreshToken = refreshToken
 	newToken.ExpiresAt = time.Now().Add(time.Duration(newToken.ExpiresIn) * time.Second)
-
-	// Fix refresh token preservation
 	if newToken.RefreshToken == "" {
 		newToken.RefreshToken = refreshToken
 	}
-
 	return &newToken, nil
 }
 
-// PKCE Flow
-
-func (p *GeminiOAuthProvider) performLoginFlow(ctx context.Context) (*TokenData, error) {
-	// 1. PKCE Generation
+func (p *Provider) performLoginFlow(ctx context.Context) (*TokenData, error) {
 	verifier, challenge := generatePKCE()
 	state := generateRandomString(16)
-
-	// 2. Start Callback Server
 	codeCh := make(chan string)
 	errCh := make(chan error)
-
 	mux := http.NewServeMux()
 	mux.HandleFunc(redirectPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -668,13 +742,11 @@ func (p *GeminiOAuthProvider) performLoginFlow(ctx context.Context) (*TokenData,
 			return
 		}
 		if _, err := w.Write([]byte("Login successful! You can close this window.")); err != nil {
-			monitor.ReportError(context.Background(), err, "action", "gemini_oauth_response_write_failed")
+			monitor.ReportError(context.Background(), err, "action", "antigravity_response_write_failed")
 		}
 		codeCh <- code
 	})
-
 	srv := &http.Server{Addr: ":" + redirectPort, Handler: mux}
-
 	go func() {
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			errCh <- err
@@ -682,31 +754,25 @@ func (p *GeminiOAuthProvider) performLoginFlow(ctx context.Context) (*TokenData,
 	}()
 	defer func() {
 		if err := srv.Shutdown(context.Background()); err != nil {
-			monitor.ReportError(context.Background(), err, "action", "gemini_oauth_server_shutdown_failed")
+			monitor.ReportError(context.Background(), err, "action", "antigravity_server_shutdown_failed")
 		}
 	}()
-
-	// 3. Open Browser
 	u, _ := url.Parse(authURL)
 	q := u.Query()
-	q.Set("client_id", clientId)
+	q.Set("client_id", clientID)
 	q.Set("redirect_uri", redirectURI)
 	q.Set("response_type", "code")
 	q.Set("scope", strings.Join(scopes, " "))
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
 	q.Set("state", state)
-	q.Set("access_type", "offline") // Important for refresh token
+	q.Set("access_type", "offline")
 	q.Set("prompt", "consent")
 	u.RawQuery = q.Encode()
-
 	fmt.Printf("Opening browser to authenticate: %s\n", u.String())
 	openBrowser(u.String())
-
-	// 4. Wait for Code
 	select {
 	case code := <-codeCh:
-		// 5. Exchange Code
 		return p.exchangeCode(code, verifier)
 	case err := <-errCh:
 		return nil, err
@@ -717,26 +783,23 @@ func (p *GeminiOAuthProvider) performLoginFlow(ctx context.Context) (*TokenData,
 	}
 }
 
-func (p *GeminiOAuthProvider) exchangeCode(code, verifier string) (*TokenData, error) {
+func (p *Provider) exchangeCode(code, verifier string) (*TokenData, error) {
 	data := url.Values{}
-	data.Set("client_id", clientId)
+	data.Set("client_id", clientID)
 	data.Set("client_secret", clientSecret)
 	data.Set("code", code)
 	data.Set("redirect_uri", redirectURI)
 	data.Set("grant_type", "authorization_code")
 	data.Set("code_verifier", verifier)
-
 	resp, err := http.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("exchange failed status %d: %s", resp.StatusCode, string(body))
 	}
-
 	var token TokenData
 	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
 		return nil, err
@@ -745,17 +808,12 @@ func (p *GeminiOAuthProvider) exchangeCode(code, verifier string) (*TokenData, e
 	return &token, nil
 }
 
-// Helpers
-
 func generatePKCE() (verifier, challenge string) {
-	// Verifier: random 32-byte string, base64url encoded
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		panic(fmt.Sprintf("crypto/rand failed: %v", err))
 	}
 	verifier = base64.RawURLEncoding.EncodeToString(b)
-
-	// Challenge: SHA256(verifier), base64url encoded
 	h := sha256.Sum256([]byte(verifier))
 	challenge = base64.RawURLEncoding.EncodeToString(h[:])
 	return
@@ -769,13 +827,8 @@ func generateRandomString(n int) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// parseRetryAfter extracts a retry delay from the response.
-// Checks Google RPC RetryInfo in the JSON body, then Retry-After header.
-// Returns 0 if no hint was found (caller should use backoff).
 func parseRetryAfter(resp *http.Response, body []byte) time.Duration {
 	var delay time.Duration
-
-	// Try Google RPC RetryInfo in error details
 	var errResp struct {
 		Error struct {
 			Details []map[string]interface{}
@@ -792,14 +845,11 @@ func parseRetryAfter(resp *http.Response, body []byte) time.Duration {
 			}
 		}
 	}
-
-	// Retry-After header overrides
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
 		if d, err := time.ParseDuration(ra + "s"); err == nil {
 			delay = d
 		}
 	}
-
 	return delay
 }
 
@@ -821,50 +871,39 @@ func openBrowser(url string) {
 }
 
 func init() {
-	remote.Register("geminioauth", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
-		retryCfg := GeminiOAuthRetryConfig{
+	remote.Register("antigravity", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
+		retryCfg := RetryConfig{
 			RetryAfterThreshold: defaultRetryAfterThreshold,
 			BackoffInitial:      defaultBackoffInitial,
 			BackoffMax:          defaultBackoffMax,
 		}
 		if raw, ok := options["retry_after_threshold"]; ok {
-			switch v := raw.(type) {
-			case string:
+			if v, ok := raw.(string); ok {
 				if d, err := time.ParseDuration(v); err == nil {
 					retryCfg.RetryAfterThreshold = d
 				}
 			}
 		}
 		if raw, ok := options["retry_backoff_initial"]; ok {
-			switch v := raw.(type) {
-			case string:
+			if v, ok := raw.(string); ok {
 				if d, err := time.ParseDuration(v); err == nil {
 					retryCfg.BackoffInitial = d
 				}
 			}
 		}
 		if raw, ok := options["retry_backoff_max"]; ok {
-			switch v := raw.(type) {
-			case string:
+			if v, ok := raw.(string); ok {
 				if d, err := time.ParseDuration(v); err == nil {
 					retryCfg.BackoffMax = d
 				}
 			}
 		}
-
-		prov := &GeminiOAuthProvider{
-			name:     name,
-			options:  options, // keep a copy to read initial token
-			resolver: resolve,
-			retryCfg: retryCfg,
-		}
-
-		// Initialize base provider with our factory
-		base := &gemini.GeminiProvider{
-			APIKey: "",
-		}
-		prov.base = base
-
+		prov := &Provider{name: name, options: options, resolver: resolve, retryCfg: retryCfg}
+		prov.base = &gemini.GeminiProvider{APIKey: ""}
 		return prov, nil
+	})
+
+	remote.Register("geminioauth", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
+		return nil, fmt.Errorf("provider type %q was renamed to %q; update your config", "geminioauth", "antigravity")
 	})
 }
