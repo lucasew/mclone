@@ -7,5 +7,5 @@ import (
 )
 
 type Writer interface {
-	ServeResponse(w http.ResponseWriter, ch <-chan message.ChatResponse, model string, stream bool)
+	ServeResponse(w http.ResponseWriter, ch <-chan message.Event, model string, stream bool)
 }

@@ -137,7 +137,7 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 
 	slog.Info("incoming request", "req_model", req.Model, "chat_model", chatModel)
 
-	msgs := parseMessages(r.Context(), req)
+	turns := parseMessages(r.Context(), req)
 
 	opts := message.ChatOptions{}
 	if len(req.Tools) > 0 {
@@ -156,7 +156,11 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 	opts.Stop = mergeStop(req.Stop, req.StopSequences)
 	opts = opts.WithDefaults(defaultOpts)
 
-	respChan, err := p.Chat(r.Context(), chatModel, msgs, opts)
+	respChan, err := p.Chat(r.Context(), message.Request{
+		Model:   chatModel,
+		Turns:   turns,
+		Options: opts,
+	})
 	if err != nil {
 		monitor.ReportError(r.Context(), err, "action", "chat_failed")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -166,8 +170,8 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 	writer.ServeResponse(w, respChan, responseModel, req.Stream)
 }
 
-func parseMessages(ctx context.Context, req chatRequest) []message.Message {
-	var msgs []message.Message
+func parseMessages(ctx context.Context, req chatRequest) []message.Turn {
+	var msgs []message.Turn
 
 	if req.System != nil {
 		systemText := ""
@@ -186,7 +190,7 @@ func parseMessages(ctx context.Context, req chatRequest) []message.Message {
 			systemText = strings.Join(parts, "\n")
 		}
 		if systemText != "" {
-			msgs = append(msgs, message.TextParts(message.RoleSystem, systemText))
+			msgs = append(msgs, message.Turn(message.TextParts(message.RoleSystem, systemText)))
 		}
 	}
 
@@ -196,7 +200,7 @@ func parseMessages(ctx context.Context, req chatRequest) []message.Message {
 			monitor.ReportError(ctx, err, "action", "convert_message", "index", i)
 			continue
 		}
-		msgs = append(msgs, msg)
+		msgs = append(msgs, message.Turn(msg))
 	}
 
 	return msgs

@@ -69,24 +69,24 @@ func (p *GeminiOAuthProvider) List(ctx context.Context) ([]remote.Model, error) 
 	}, nil
 }
 
-func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
+func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
 	if err := p.ensureToken(ctx); err != nil {
-		out := make(chan message.ChatResponse)
+		out := make(chan message.Event)
 		go func() {
-			out <- message.ChatResponse{Error: err}
+			out <- message.ResponseError{Err: err}
 			close(out)
 		}()
 		return out, nil
 	}
 
-	out := make(chan message.ChatResponse)
+	out := make(chan message.Event)
 	go func() {
 		defer close(out)
 
 		// Patch messages to include dummy thought signature for Gemini 3 models
 		// to avoid ToGeminiContents dropping them (mimicking plugin behavior).
-		patchedMessages := make([]message.Message, len(messages))
-		for i, m := range messages {
+		patchedMessages := make([]message.Turn, len(req.Turns))
+		for i, m := range req.Turns {
 			var newParts []message.Part
 			for _, p := range m.Parts {
 				if tc, ok := p.(message.ToolCallPart); ok {
@@ -108,19 +108,19 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 		contents, sys := gemini.ToGeminiContents(patchedMessages)
 
 		genConfig := map[string]interface{}{}
-		if options.Temperature != nil {
-			genConfig["temperature"] = *options.Temperature
+		if req.Options.Temperature != nil {
+			genConfig["temperature"] = *req.Options.Temperature
 		}
-		if options.MaxTokens != nil {
-			genConfig["maxOutputTokens"] = *options.MaxTokens
+		if req.Options.MaxTokens != nil {
+			genConfig["maxOutputTokens"] = *req.Options.MaxTokens
 		}
-		if options.TopP != nil {
-			genConfig["topP"] = *options.TopP
+		if req.Options.TopP != nil {
+			genConfig["topP"] = *req.Options.TopP
 		}
-		if len(options.Stop) > 0 {
-			genConfig["stopSequences"] = options.Stop
+		if len(req.Options.Stop) > 0 {
+			genConfig["stopSequences"] = req.Options.Stop
 		}
-		if options.JSONMode {
+		if req.Options.JSONMode {
 			genConfig["responseMimeType"] = "application/json"
 		}
 
@@ -131,13 +131,13 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 		if sys != nil {
 			reqPayload["systemInstruction"] = sys
 		}
-		if len(options.Tools) > 0 {
-			reqPayload["tools"] = gemini.ToGeminiTools(options.Tools)
+		if len(req.Options.Tools) > 0 {
+			reqPayload["tools"] = gemini.ToGeminiTools(req.Options.Tools)
 		}
 
 		// Cloud Code API expects a wrapped body: { model: "...", request: { ... } }
 		wrappedBody := map[string]interface{}{
-			"model":   modelName,
+			"model":   req.Model,
 			"request": reqPayload,
 		}
 		// Inject project ID if available
@@ -150,7 +150,7 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 
 		bodyBytes, err := json.Marshal(wrappedBody)
 		if err != nil {
-			out <- message.ChatResponse{Error: fmt.Errorf("failed to marshal request: %w", err)}
+			out <- message.ResponseError{Err: fmt.Errorf("failed to marshal request: %w", err)}
 			return
 		}
 
@@ -159,7 +159,7 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 		if err != nil {
-			out <- message.ChatResponse{Error: err}
+			out <- message.ResponseError{Err: err}
 			return
 		}
 
@@ -171,7 +171,7 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			out <- message.ChatResponse{Error: err}
+			out <- message.ResponseError{Err: err}
 			return
 		}
 
@@ -182,11 +182,11 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 			if resp.StatusCode == 429 || resp.StatusCode == 503 {
 				retryAfter := parseRetryAfter(resp, body)
 				slog.Warn("gemini_rate_limit", "status", resp.StatusCode, "retry_after", retryAfter)
-				out <- message.ChatResponse{Error: &message.ErrRateLimit{RetryAfter: retryAfter}}
+				out <- message.ResponseError{Err: &message.ErrRateLimit{RetryAfter: retryAfter}}
 				return
 			}
 
-			out <- message.ChatResponse{Error: fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))}
+			out <- message.ResponseError{Err: fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))}
 			return
 		}
 		defer resp.Body.Close()
@@ -197,7 +197,7 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err != io.EOF {
-					out <- message.ChatResponse{Error: err}
+					out <- message.ResponseError{Err: err}
 				}
 				break
 			}
@@ -249,24 +249,24 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, modelName string, messag
 			for _, cand := range candidates {
 				for _, part := range cand.Content.Parts {
 					if part.Text != "" {
-						out <- message.ChatResponse{Content: part.Text}
+						out <- message.TextDelta{Text: part.Text}
 					}
 					if part.FunctionCall != nil {
 						// Convert args to JSON bytes for ToolCall
 						argsBytes, _ := json.Marshal(part.FunctionCall.Args)
-						out <- message.ChatResponse{
-							ToolCalls: []message.ToolCall{{
+						out <- message.ToolCallFinished{
+							Call: message.ToolCall{
 								ID:        "call_" + generateRandomString(8), // Gemini doesn't always send ID in stream?
 								Name:      part.FunctionCall.Name,
 								Arguments: json.RawMessage(argsBytes),
-							}},
+							},
 						}
 					}
 				}
 			}
 		}
 
-		out <- message.ChatResponse{Done: true}
+		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
 	}()
 	return out, nil
 }

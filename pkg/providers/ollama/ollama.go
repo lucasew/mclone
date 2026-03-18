@@ -54,45 +54,45 @@ func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return models, nil
 }
 
-func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
+func (p *OllamaProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
 	client := sdk.NewClient(
 		option.WithBaseURL(p.BaseURL+"/v1"),
 		option.WithAPIKey("ollama"),
 	)
 
 	params := sdk.ChatCompletionNewParams{
-		Model:    modelName, // string
-		Messages: toSDKMessages(messages),
+		Model:    req.Model, // string
+		Messages: toSDKMessages(req.Turns),
 	}
 
-	if options.Temperature != nil {
-		params.Temperature = sdk.Float(*options.Temperature)
+	if req.Options.Temperature != nil {
+		params.Temperature = sdk.Float(*req.Options.Temperature)
 	}
-	if options.TopP != nil {
-		params.TopP = sdk.Float(*options.TopP)
+	if req.Options.TopP != nil {
+		params.TopP = sdk.Float(*req.Options.TopP)
 	}
-	if options.MaxTokens != nil {
-		params.MaxTokens = sdk.Int(int64(*options.MaxTokens))
+	if req.Options.MaxTokens != nil {
+		params.MaxTokens = sdk.Int(int64(*req.Options.MaxTokens))
 	}
-	if len(options.Stop) > 0 {
-		if len(options.Stop) == 1 {
+	if len(req.Options.Stop) > 0 {
+		if len(req.Options.Stop) == 1 {
 			params.Stop = sdk.ChatCompletionNewParamsStopUnion{
-				OfString: sdk.String(options.Stop[0]),
+				OfString: sdk.String(req.Options.Stop[0]),
 			}
 		} else {
 			params.Stop = sdk.ChatCompletionNewParamsStopUnion{
-				OfStringArray: options.Stop,
+				OfStringArray: req.Options.Stop,
 			}
 		}
 	}
 
-	if len(options.Tools) > 0 {
-		params.Tools = toSDKTools(options.Tools)
+	if len(req.Options.Tools) > 0 {
+		params.Tools = toSDKTools(req.Options.Tools)
 	}
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
 
-	out := make(chan message.ChatResponse)
+	out := make(chan message.Event)
 	go func() {
 		defer close(out)
 		defer stream.Close()
@@ -107,34 +107,34 @@ func (p *OllamaProvider) Chat(ctx context.Context, modelName string, messages []
 
 			for _, choice := range chunk.Choices {
 				if choice.Delta.Content != "" {
-					out <- message.ChatResponse{Content: choice.Delta.Content}
+					out <- message.TextDelta{Text: choice.Delta.Content}
 				}
 			}
 
 			if tc, ok := acc.JustFinishedToolCall(); ok {
 				slog.Info("ollama_tool_call", "name", tc.Name)
-				out <- message.ChatResponse{
-					ToolCalls: []message.ToolCall{{
+				out <- message.ToolCallFinished{
+					Call: message.ToolCall{
 						ID:        tc.ID,
 						Name:      tc.Name,
 						Arguments: json.RawMessage(tc.Arguments),
-					}},
+					},
 				}
 			}
 		}
 		if err := stream.Err(); err != nil {
 			monitor.ReportError(ctx, err, "action", "ollama_stream_error")
-			out <- message.ChatResponse{Error: err}
+			out <- message.ResponseError{Err: err}
 			return
 		}
 
 		slog.Debug("ollama_request_done", "total_duration", time.Since(startTime).String())
-		out <- message.ChatResponse{Done: true}
+		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
 	}()
 	return out, nil
 }
 
-func toSDKMessages(messages []message.Message) []sdk.ChatCompletionMessageParamUnion {
+func toSDKMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnion {
 	var out []sdk.ChatCompletionMessageParamUnion
 	for _, m := range messages {
 		switch m.Role {

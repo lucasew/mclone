@@ -34,7 +34,7 @@ var chatCmd = &cobra.Command{
 		}
 
 		ctx := context.Background()
-		var messages []message.Message
+		var messages []message.Turn
 
 		scanner := bufio.NewScanner(os.Stdin)
 		fmt.Printf("Chatting with %s on %s. Type 'exit' to quit.\n", modelName, remoteName)
@@ -49,26 +49,31 @@ var chatCmd = &cobra.Command{
 				break
 			}
 
-			messages = append(messages, message.TextParts(message.RoleUser, input))
+			messages = append(messages, message.Turn(message.TextParts(message.RoleUser, input)))
 
-			respChan, err := p.Chat(ctx, modelName, messages, message.ChatOptions{})
+			respChan, err := p.Chat(ctx, message.Request{
+				Model:   modelName,
+				Turns:   messages,
+				Options: message.ChatOptions{},
+			})
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 				continue
 			}
 
 			var fullResponse strings.Builder
-			for resp := range respChan {
-				if resp.Error != nil {
-					fmt.Printf("\nError: %v\n", resp.Error)
-					break
+			for event := range respChan {
+				switch ev := event.(type) {
+				case message.ResponseError:
+					fmt.Printf("\nError: %v\n", ev.Err)
+				case message.TextDelta:
+					fmt.Print(ev.Text)
+					fullResponse.WriteString(ev.Text)
 				}
-				fmt.Print(resp.Content)
-				fullResponse.WriteString(resp.Content)
 			}
 			fmt.Println()
 
-			messages = append(messages, message.TextParts(message.RoleAssistant, fullResponse.String()))
+			messages = append(messages, message.Turn(message.TextParts(message.RoleAssistant, fullResponse.String())))
 		}
 	},
 }

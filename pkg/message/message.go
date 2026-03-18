@@ -108,7 +108,8 @@ func ParseArguments[T interface{}](tc ToolCall, target *T) error {
 	return json.Unmarshal(tc.Arguments, target)
 }
 
-// ChatResponse represents a streaming chunk from a provider.
+// ChatResponse is the legacy streaming chunk type.
+// New code should prefer Event, but this remains temporarily to reduce migration cost.
 type ChatResponse struct {
 	Content   string
 	ToolCalls []ToolCall

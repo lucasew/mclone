@@ -46,53 +46,53 @@ func (p *GeminiProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return models, nil
 }
 
-func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
+func (p *GeminiProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
 	client, err := p.client(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, t := range options.Tools {
+	for _, t := range req.Options.Tools {
 		toolDefinitionCache.Store(t.Name, t)
 	}
 
-	contents, systemInstruction := ToGeminiContents(messages)
+	contents, systemInstruction := ToGeminiContents(req.Turns)
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
 	}
-	if options.Temperature != nil {
-		t := float32(*options.Temperature)
+	if req.Options.Temperature != nil {
+		t := float32(*req.Options.Temperature)
 		config.Temperature = &t
 	}
-	if options.MaxTokens != nil {
-		config.MaxOutputTokens = int32(*options.MaxTokens)
+	if req.Options.MaxTokens != nil {
+		config.MaxOutputTokens = int32(*req.Options.MaxTokens)
 	}
-	if options.TopP != nil {
-		t := float32(*options.TopP)
+	if req.Options.TopP != nil {
+		t := float32(*req.Options.TopP)
 		config.TopP = &t
 	}
-	if len(options.Stop) > 0 {
-		config.StopSequences = options.Stop
+	if len(req.Options.Stop) > 0 {
+		config.StopSequences = req.Options.Stop
 	}
-	if len(options.Tools) > 0 {
-		config.Tools = ToGeminiTools(options.Tools)
+	if len(req.Options.Tools) > 0 {
+		config.Tools = ToGeminiTools(req.Options.Tools)
 	}
-	if options.JSONMode {
+	if req.Options.JSONMode {
 		config.ResponseMIMEType = "application/json"
 	}
 
-	out := make(chan message.ChatResponse)
+	out := make(chan message.Event)
 	go func() {
 		defer close(out)
-		slog.Debug("gemini_generate_start", "model", modelName, "msgs_len", len(messages), "contents_len", len(contents))
+		slog.Debug("gemini_generate_start", "model", req.Model, "msgs_len", len(req.Turns), "contents_len", len(contents))
 
 		toolCallsBuffer := make(map[int]*message.ToolCall)
 		var toolCallOrder []int
 
-		for resp, err := range client.Models.GenerateContentStream(ctx, modelName, contents, config) {
+		for resp, err := range client.Models.GenerateContentStream(ctx, req.Model, contents, config) {
 			if err != nil {
 				monitor.ReportError(ctx, err, "action", "gemini_stream_error")
-				out <- message.ChatResponse{Error: err}
+				out <- message.ResponseError{Err: err}
 				return
 			}
 
@@ -103,9 +103,9 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				for i, part := range cand.Content.Parts {
 					if part.Text != "" {
 						if part.Thought {
-							out <- message.ChatResponse{Thought: part.Text}
+							out <- message.ReasoningDelta{Text: part.Text}
 						} else {
-							out <- message.ChatResponse{Content: part.Text}
+							out <- message.TextDelta{Text: part.Text}
 						}
 					}
 					if part.FunctionCall != nil {
@@ -156,9 +156,13 @@ func (p *GeminiProvider) Chat(ctx context.Context, modelName string, messages []
 				}
 				finalCalls = append(finalCalls, tc)
 			}
-			out <- message.ChatResponse{ToolCalls: finalCalls}
+			for _, call := range finalCalls {
+				out <- message.ToolCallFinished{Call: call}
+			}
+			out <- message.ResponseCompleted{Reason: message.StopReasonToolCall}
+			return
 		}
-		out <- message.ChatResponse{Done: true}
+		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
 	}()
 	return out, nil
 }
@@ -204,7 +208,7 @@ func (p *GeminiProvider) client(ctx context.Context) (*genai.Client, error) {
 	})
 }
 
-func ToGeminiContents(messages []message.Message) ([]*genai.Content, *genai.Content) {
+func ToGeminiContents(messages []message.Turn) ([]*genai.Content, *genai.Content) {
 	var system *genai.Content
 	var rawTurns []*genai.Content
 

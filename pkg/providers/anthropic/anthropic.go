@@ -57,7 +57,7 @@ func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return models, nil
 }
 
-func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
+func (p *AnthropicProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
 	opts := []option.RequestOption{option.WithAPIKey(p.APIKey)}
 	if p.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(p.BaseURL))
@@ -65,40 +65,40 @@ func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages
 	client := sdk.NewClient(opts...)
 
 	params := sdk.MessageNewParams{
-		Model:    sdk.Model(modelName),
-		Messages: toSDKMessages(messages),
+		Model:    sdk.Model(req.Model),
+		Messages: toSDKMessages(req.Turns),
 	}
 
 	// System prompt
-	if sys := extractSystem(messages); sys != "" {
+	if sys := extractSystem(req.Turns); sys != "" {
 		params.System = []sdk.TextBlockParam{{Text: sys}}
 	}
 
 	// Generation params
-	if options.MaxTokens != nil {
-		params.MaxTokens = int64(*options.MaxTokens)
+	if req.Options.MaxTokens != nil {
+		params.MaxTokens = int64(*req.Options.MaxTokens)
 	} else {
 		params.MaxTokens = 8192
 	}
-	if options.Temperature != nil {
-		params.Temperature = sdk.Float(*options.Temperature)
+	if req.Options.Temperature != nil {
+		params.Temperature = sdk.Float(*req.Options.Temperature)
 	}
-	if options.TopP != nil {
-		params.TopP = sdk.Float(*options.TopP)
+	if req.Options.TopP != nil {
+		params.TopP = sdk.Float(*req.Options.TopP)
 	}
-	if len(options.Stop) > 0 {
-		params.StopSequences = options.Stop
+	if len(req.Options.Stop) > 0 {
+		params.StopSequences = req.Options.Stop
 	}
 
 	// Tools
-	if len(options.Tools) > 0 {
-		params.Tools = toSDKTools(options.Tools)
+	if len(req.Options.Tools) > 0 {
+		params.Tools = toSDKTools(req.Options.Tools)
 		slog.Info("anthropic_tools_sent", "count", len(params.Tools), "names", listToolNames(params.Tools))
 	}
 
 	stream := client.Messages.NewStreaming(ctx, params)
 
-	out := make(chan message.ChatResponse)
+	out := make(chan message.Event)
 	go func() {
 		defer close(out)
 		defer stream.Close()
@@ -126,34 +126,39 @@ func (p *AnthropicProvider) Chat(ctx context.Context, modelName string, messages
 				delta := ev.Delta
 				switch d := delta.AsAny().(type) {
 				case sdk.TextDelta:
-					out <- message.ChatResponse{Content: d.Text}
+					out <- message.TextDelta{Text: d.Text}
 				case sdk.InputJSONDelta:
 					if tc, ok := toolCalls[ev.Index]; ok {
 						tc.Arguments = append(tc.Arguments, []byte(d.PartialJSON)...)
+						out <- message.ToolCallDelta{
+							ID:             tc.ID,
+							Name:           tc.Name,
+							ArgumentsDelta: d.PartialJSON,
+						}
 					}
 				}
 			}
 		}
 		if err := stream.Err(); err != nil {
 			monitor.ReportError(ctx, err, "action", "anthropic_stream_error")
-			out <- message.ChatResponse{Error: err}
+			out <- message.ResponseError{Err: err}
 			return
 		}
 
 		if len(toolCallOrder) > 0 {
-			finalCalls := make([]message.ToolCall, 0, len(toolCallOrder))
 			for _, idx := range toolCallOrder {
 				tc := *toolCalls[idx]
-				finalCalls = append(finalCalls, tc)
+				out <- message.ToolCallFinished{Call: tc}
 			}
-			out <- message.ChatResponse{ToolCalls: finalCalls}
+			out <- message.ResponseCompleted{Reason: message.StopReasonToolCall}
+			return
 		}
-		out <- message.ChatResponse{Done: true}
+		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
 	}()
 	return out, nil
 }
 
-func extractSystem(messages []message.Message) string {
+func extractSystem(messages []message.Turn) string {
 	for _, m := range messages {
 		if m.Role == message.RoleSystem {
 			for _, p := range m.Parts {
@@ -166,7 +171,7 @@ func extractSystem(messages []message.Message) string {
 	return ""
 }
 
-func toSDKMessages(messages []message.Message) []sdk.MessageParam {
+func toSDKMessages(messages []message.Turn) []sdk.MessageParam {
 	var out []sdk.MessageParam
 	for _, m := range messages {
 		if m.Role == message.RoleSystem {
