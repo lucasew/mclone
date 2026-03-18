@@ -48,7 +48,22 @@ type GeminiOAuthProvider struct {
 	resolver remote.Resolver
 	token    *TokenData
 	loginMu  sync.Mutex
+	retryCfg GeminiOAuthRetryConfig
+	retryMu  sync.Mutex
+	retrySeq int
 }
+
+type GeminiOAuthRetryConfig struct {
+	RetryAfterThreshold time.Duration
+	BackoffInitial      time.Duration
+	BackoffMax          time.Duration
+}
+
+const (
+	defaultRetryAfterThreshold = 15 * time.Second
+	defaultBackoffInitial      = 1 * time.Second
+	defaultBackoffMax          = 8 * time.Second
+)
 
 func (p *GeminiOAuthProvider) Name() string { return "geminioauth" }
 
@@ -169,24 +184,9 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 		req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
 		req.Header.Set("Client-Metadata", "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := p.doChatRequest(ctx, req, bodyBytes)
 		if err != nil {
 			out <- message.ResponseError{Err: err}
-			return
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-
-			if resp.StatusCode == 429 || resp.StatusCode == 503 {
-				retryAfter := parseRetryAfter(resp, body)
-				slog.Warn("gemini_rate_limit", "status", resp.StatusCode, "retry_after", retryAfter)
-				out <- message.ResponseError{Err: &message.ErrRateLimit{RetryAfter: retryAfter}}
-				return
-			}
-
-			out <- message.ResponseError{Err: fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))}
 			return
 		}
 		defer resp.Body.Close()
@@ -269,6 +269,96 @@ func (p *GeminiOAuthProvider) Chat(ctx context.Context, req message.Request) (<-
 		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
 	}()
 	return out, nil
+}
+
+func (p *GeminiOAuthProvider) doChatRequest(ctx context.Context, request *http.Request, body []byte) (*http.Response, error) {
+	threshold := p.retryCfg.RetryAfterThreshold
+	if threshold <= 0 {
+		threshold = defaultRetryAfterThreshold
+	}
+	backoffInitial := p.retryCfg.BackoffInitial
+	if backoffInitial <= 0 {
+		backoffInitial = defaultBackoffInitial
+	}
+	backoffMax := p.retryCfg.BackoffMax
+	if backoffMax <= 0 {
+		backoffMax = defaultBackoffMax
+	}
+
+	for attempt := 0; ; attempt++ {
+		req := request.Clone(ctx)
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(body)), nil
+		}
+		req.ContentLength = int64(len(body))
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
+			if resp.StatusCode == http.StatusOK {
+				p.resetRateLimitBackoff()
+				return resp, nil
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		retryAfter := parseRetryAfter(resp, respBody)
+		retrySeq := 0
+		if retryAfter <= 0 {
+			retryAfter, retrySeq = p.nextRateLimitBackoff(backoffInitial, backoffMax)
+		} else {
+			p.resetRateLimitBackoff()
+		}
+		slog.Warn("gemini_rate_limit",
+			"status", resp.StatusCode,
+			"retry_after", retryAfter,
+			"retry_seq", retrySeq,
+			"attempt", attempt+1,
+			"threshold", threshold,
+		)
+
+		if retryAfter > threshold {
+			return nil, &message.ErrRateLimit{RetryAfter: retryAfter}
+		}
+
+		timer := time.NewTimer(retryAfter)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func backoffDuration(sequence int, initial, max time.Duration) time.Duration {
+	backoff := initial << sequence
+	if backoff > max {
+		return max
+	}
+	return backoff
+}
+
+func (p *GeminiOAuthProvider) nextRateLimitBackoff(initial, max time.Duration) (time.Duration, int) {
+	p.retryMu.Lock()
+	defer p.retryMu.Unlock()
+	seq := p.retrySeq
+	backoff := backoffDuration(seq, initial, max)
+	p.retrySeq++
+	return backoff, seq
+}
+
+func (p *GeminiOAuthProvider) resetRateLimitBackoff() {
+	p.retryMu.Lock()
+	defer p.retryMu.Unlock()
+	p.retrySeq = 0
 }
 
 // Token management
@@ -701,10 +791,41 @@ func openBrowser(url string) {
 
 func init() {
 	remote.Register("geminioauth", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
+		retryCfg := GeminiOAuthRetryConfig{
+			RetryAfterThreshold: defaultRetryAfterThreshold,
+			BackoffInitial:      defaultBackoffInitial,
+			BackoffMax:          defaultBackoffMax,
+		}
+		if raw, ok := options["retry_after_threshold"]; ok {
+			switch v := raw.(type) {
+			case string:
+				if d, err := time.ParseDuration(v); err == nil {
+					retryCfg.RetryAfterThreshold = d
+				}
+			}
+		}
+		if raw, ok := options["retry_backoff_initial"]; ok {
+			switch v := raw.(type) {
+			case string:
+				if d, err := time.ParseDuration(v); err == nil {
+					retryCfg.BackoffInitial = d
+				}
+			}
+		}
+		if raw, ok := options["retry_backoff_max"]; ok {
+			switch v := raw.(type) {
+			case string:
+				if d, err := time.ParseDuration(v); err == nil {
+					retryCfg.BackoffMax = d
+				}
+			}
+		}
+
 		prov := &GeminiOAuthProvider{
 			name:     name,
 			options:  options, // keep a copy to read initial token
 			resolver: resolve,
+			retryCfg: retryCfg,
 		}
 
 		// Initialize base provider with our factory
