@@ -104,10 +104,17 @@ func (p *Provider) List(ctx context.Context) ([]remote.Model, error) {
 		return nil, err
 	}
 	return []remote.Model{
-		{Name: "Gemini 2.0 Flash", Slug: "gemini-2.0-flash"},
-		{Name: "Gemini 1.5 Pro", Slug: "gemini-1.5-pro"},
-		{Name: "Gemini 1.5 Flash", Slug: "gemini-1.5-flash"},
-		{Name: "Gemini 1.0 Pro", Slug: "gemini-1.0-pro"},
+		{Name: "Gemini 3 Pro (Antigravity)", Slug: "antigravity-gemini-3-pro"},
+		{Name: "Gemini 3.1 Pro (Antigravity)", Slug: "antigravity-gemini-3.1-pro"},
+		{Name: "Gemini 3 Flash (Antigravity)", Slug: "antigravity-gemini-3-flash"},
+		{Name: "Claude Sonnet 4.6 (Antigravity)", Slug: "antigravity-claude-sonnet-4-6"},
+		{Name: "Claude Opus 4.6 Thinking (Antigravity)", Slug: "antigravity-claude-opus-4-6-thinking"},
+		{Name: "Gemini 2.5 Flash (Gemini CLI)", Slug: "gemini-2.5-flash"},
+		{Name: "Gemini 2.5 Pro (Gemini CLI)", Slug: "gemini-2.5-pro"},
+		{Name: "Gemini 3 Flash Preview (Gemini CLI)", Slug: "gemini-3-flash-preview"},
+		{Name: "Gemini 3 Pro Preview (Gemini CLI)", Slug: "gemini-3-pro-preview"},
+		{Name: "Gemini 3.1 Pro Preview (Gemini CLI)", Slug: "gemini-3.1-pro-preview"},
+		{Name: "Gemini 3.1 Pro Preview Custom Tools (Gemini CLI)", Slug: "gemini-3.1-pro-preview-customtools"},
 	}, nil
 }
 
@@ -415,9 +422,6 @@ func resolveAntigravityModel(model string) string {
 	model = strings.TrimPrefix(model, "antigravity-")
 	model = strings.TrimSuffix(model, "-preview-customtools")
 	model = strings.TrimSuffix(model, "-preview")
-	if model == "gemini-3-pro" {
-		model = "gemini-3.1-pro"
-	}
 
 	if alias, ok := modelAliases[model]; ok {
 		model = alias
