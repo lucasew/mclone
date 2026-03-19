@@ -101,7 +101,20 @@ var serveCmd = &cobra.Command{
 			serveChatRequest(w, r, p, overrideModel, openaiWriter, cmd, defaultOpts)
 		})
 		mux.HandleFunc("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
-			serveResponsesRequest(w, r, p, overrideModel, cmd, defaultOpts)
+			switch r.Method {
+			case http.MethodPost:
+				serveResponsesRequest(w, r, p, overrideModel, cmd, defaultOpts)
+			default:
+				http.NotFound(w, r)
+			}
+		})
+		mux.HandleFunc("/v1/responses/", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				serveResponsesRetrieve(w, r)
+			default:
+				http.NotFound(w, r)
+			}
 		})
 		mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 			serveModels(w, r, p)
@@ -117,9 +130,10 @@ var serveCmd = &cobra.Command{
 			slog.Info("request", "method", r.Method, "path", r.URL.Path)
 			mux.ServeHTTP(w, r)
 		})
+		finalHandler := requestDecompressionMiddleware(handler)
 
 		slog.Info("starting server", "remote", remoteName, "port", port)
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", port), handler); err != nil {
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", port), finalHandler); err != nil {
 			monitor.ReportError(cmd.Context(), err, "action", "server_listen")
 		}
 	},
@@ -337,6 +351,14 @@ func serveRateLimitError(w http.ResponseWriter, writer protocol.Writer, err erro
 				"message": err.Error(),
 			},
 		})
+	case responsesAPIWriter:
+		protocol.WriteJSON(w, map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "rate_limit_error",
+				"message": err.Error(),
+			},
+		})
 	default:
 		protocol.WriteJSON(w, map[string]any{
 			"error": err.Error(),
@@ -358,6 +380,11 @@ func setRateLimitHeaders(w http.ResponseWriter, writer protocol.Writer, retryAft
 
 	switch writer.(type) {
 	case *openai.Writer:
+		reset := (time.Duration(seconds) * time.Second).String()
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+		w.Header().Set("x-ratelimit-reset-requests", reset)
+		w.Header().Set("x-ratelimit-reset-tokens", reset)
+	case responsesAPIWriter:
 		reset := (time.Duration(seconds) * time.Second).String()
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 		w.Header().Set("x-ratelimit-reset-requests", reset)
