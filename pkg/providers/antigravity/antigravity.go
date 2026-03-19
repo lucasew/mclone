@@ -110,7 +110,8 @@ type RetryConfig struct {
 const (
 	defaultRetryAfterThreshold = 15 * time.Second
 	defaultBackoffInitial      = 1 * time.Second
-	defaultBackoffMax          = 8 * time.Second
+	defaultBackoffMax          = 0
+	maxReasonableRetryAfter    = 24 * time.Hour
 )
 
 func (p *Provider) Name() string { return "antigravity" }
@@ -392,6 +393,10 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 				resp.Body.Close()
 				retryAfter := parseRetryAfter(resp, respBody)
 				retrySeq := 0
+				if retryAfter > maxReasonableRetryAfter {
+					slog.Warn("antigravity_retry_after_unreasonable", "endpoint", endpoint, "retry_after", retryAfter, "status", resp.StatusCode)
+					retryAfter = 0
+				}
 				if retryAfter <= 0 {
 					retryAfter, retrySeq = p.nextRateLimitBackoff(backoffInitial, backoffMax)
 				} else {
@@ -440,7 +445,7 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 
 func backoffDuration(sequence int, initial, max time.Duration) time.Duration {
 	backoff := initial << sequence
-	if backoff > max {
+	if max > 0 && backoff > max {
 		return max
 	}
 	return backoff
