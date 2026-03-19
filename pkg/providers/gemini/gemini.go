@@ -218,7 +218,11 @@ func ToGeminiContents(messages []message.Turn) ([]*genai.Content, *genai.Content
 	for _, m := range messages {
 		for _, p := range m.Parts {
 			if tc, ok := p.(message.ToolCallPart); ok {
-				toolNames[tc.ID] = tc.Name
+				name := tc.Name
+				if name == "" {
+					name = "tool"
+				}
+				toolNames[tc.ID] = name
 				sig := tc.ThoughtSignature
 				if len(sig) == 0 {
 					if cached, ok := signatureCache.Load(tc.ID); ok {
@@ -255,9 +259,20 @@ func ToGeminiContents(messages []message.Turn) ([]*genai.Content, *genai.Content
 					slog.Debug("gemini_skip_unsigned_call", "id", v.ID, "name", v.Name)
 					continue
 				}
-				sdkArgs := make(map[string]interface{})
-				if err := json.Unmarshal(v.Arguments, &sdkArgs); err != nil {
-					monitor.ReportError(context.Background(), err, "action", "gemini_arg_unmarshal_error")
+				name := v.Name
+				if name == "" {
+					name = "tool"
+				}
+				sdkArgs := map[string]interface{}{}
+				if len(v.Arguments) > 0 {
+					if err := json.Unmarshal(v.Arguments, &sdkArgs); err != nil {
+						var fallback any
+						if err2 := json.Unmarshal(v.Arguments, &fallback); err2 == nil {
+							sdkArgs = map[string]interface{}{"input": fallback}
+						} else {
+							monitor.ReportError(context.Background(), err, "action", "gemini_arg_unmarshal_error")
+						}
+					}
 				}
 				sig := v.ThoughtSignature
 				if len(sig) == 0 {
@@ -266,7 +281,7 @@ func ToGeminiContents(messages []message.Turn) ([]*genai.Content, *genai.Content
 					}
 				}
 				parts = append(parts, &genai.Part{
-					FunctionCall:     &genai.FunctionCall{ID: v.ID, Name: v.Name, Args: sdkArgs},
+					FunctionCall:     &genai.FunctionCall{ID: v.ID, Name: name, Args: sdkArgs},
 					ThoughtSignature: sig,
 				})
 			case message.ToolResultPart:
