@@ -265,24 +265,22 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 type stderrSpanExporter struct{}
 
 func (stderrSpanExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
-	enc := json.NewEncoder(os.Stderr)
 	for _, span := range spans {
-		record := map[string]any{
-			"type":           "otel_span",
-			"name":           span.Name(),
-			"trace_id":       span.SpanContext().TraceID().String(),
-			"span_id":        span.SpanContext().SpanID().String(),
-			"parent_span_id": span.Parent().SpanID().String(),
-			"start":          span.StartTime(),
-			"end":            span.EndTime(),
-			"duration_ms":    span.EndTime().Sub(span.StartTime()).Milliseconds(),
-			"attributes":     span.Attributes(),
-			"status_code":    span.Status().Code.String(),
-			"status_message": span.Status().Description,
+		args := []any{
+			"span", span.Name(),
+			"trace_id", span.SpanContext().TraceID().String(),
+			"span_id", span.SpanContext().SpanID().String(),
+			"parent_span_id", span.Parent().SpanID().String(),
+			"duration_ms", span.EndTime().Sub(span.StartTime()).Milliseconds(),
+			"status", span.Status().Code.String(),
 		}
-		if err := enc.Encode(record); err != nil {
-			return err
+		if msg := span.Status().Description; msg != "" {
+			args = append(args, "status_message", msg)
 		}
+		for _, attr := range span.Attributes() {
+			args = append(args, string(attr.Key), attr.Value.Emit())
+		}
+		slog.Debug("otel_span", args...)
 	}
 	return nil
 }
