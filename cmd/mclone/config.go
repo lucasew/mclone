@@ -160,7 +160,7 @@ func interactiveConfig(ctx context.Context) {
 				fmt.Print("Enter namespace (user or org): ")
 				ns, _ := reader.ReadString('\n')
 				options["namespace"] = strings.TrimSpace(ns)
-			case "geminioauth":
+			case "antigravity":
 				fmt.Println("No specific options required (uses hardcoded client ID).")
 			case "ddg":
 				fmt.Println("No options required for DuckDuckGo search.")
@@ -194,7 +194,7 @@ func interactiveConfig(ctx context.Context) {
 			}
 			fmt.Printf("Remote %q added.\n", name)
 
-			if selectedType == "geminioauth" {
+			if selectedType == "antigravity" {
 				fmt.Print("Authenticate now? [Y/n]: ")
 				authChoice, _ := reader.ReadString('\n')
 				authChoice = strings.TrimSpace(strings.ToLower(authChoice))
@@ -249,6 +249,20 @@ var configAddCmd = &cobra.Command{
 		if err := loader.Save(conf); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
 			return
+		}
+		if typeName == "antigravity" {
+			fmt.Println("Starting authentication flow...")
+			resolve := remote.NewResolver(loader)
+			prov, err := resolve.Provider(name)
+			if err != nil {
+				fmt.Printf("Failed to create provider: %v\n", err)
+				return
+			}
+			if _, err := prov.List(context.Background()); err != nil {
+				fmt.Printf("Authentication failed: %v\n", err)
+				return
+			}
+			fmt.Println("Authentication successful! Token saved.")
 		}
 		fmt.Printf("Remote %q added successfully\n", name)
 	},

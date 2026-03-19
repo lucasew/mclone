@@ -30,14 +30,14 @@ func (p *ToolboxProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return p.base.List(ctx)
 }
 
-func (p *ToolboxProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
+func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
 	// Inject tool definitions, dedup by name (ours win)
 	ownNames := make(map[string]bool)
 	for _, t := range p.tools {
 		ownNames[strings.ToLower(t.Definition.Name)] = true
 	}
 	var cleanTools []message.ToolDefinition
-	for _, t := range options.Tools {
+	for _, t := range req.Options.Tools {
 		if !ownNames[strings.ToLower(t.Name)] {
 			cleanTools = append(cleanTools, t)
 		}
@@ -45,18 +45,19 @@ func (p *ToolboxProvider) Chat(ctx context.Context, modelName string, messages [
 	for _, t := range p.tools {
 		cleanTools = append(cleanTools, t.Definition)
 	}
-	options.Tools = cleanTools
+	req.Options.Tools = cleanTools
 
-	out := make(chan message.ChatResponse)
+	out := make(chan message.Event)
 	go func() {
 		defer close(out)
-		currentMsgs := make([]message.Message, len(messages))
-		copy(currentMsgs, messages)
+		currentTurns := make([]message.Turn, len(req.Turns))
+		copy(currentTurns, req.Turns)
 
 		for loop := range p.maxLoops {
-			ch, err := p.base.Chat(ctx, modelName, currentMsgs, options)
+			req.Turns = currentTurns
+			ch, err := p.base.Chat(ctx, req)
 			if err != nil {
-				out <- message.ChatResponse{Error: err}
+				out <- message.ResponseError{Err: err}
 				return
 			}
 
@@ -64,23 +65,21 @@ func (p *ToolboxProvider) Chat(ctx context.Context, modelName string, messages [
 			var handledCalls []message.ToolCall
 			var passthroughCalls []message.ToolCall
 
-			for resp := range ch {
-				if resp.Error != nil {
-					out <- resp
+			for event := range ch {
+				switch ev := event.(type) {
+				case message.ResponseError:
+					out <- ev
 					return
-				}
-				if resp.Content != "" {
-					out <- resp
-					assistantParts = append(assistantParts, message.TextPart{Text: resp.Content})
-				}
-				if resp.Thought != "" {
-					out <- resp
-				}
-				for _, tc := range resp.ToolCalls {
-					if _, ok := p.toolMap[strings.ToLower(tc.Name)]; ok {
-						handledCalls = append(handledCalls, tc)
+				case message.TextDelta:
+					out <- ev
+					assistantParts = append(assistantParts, message.TextPart{Text: ev.Text})
+				case message.ReasoningDelta:
+					out <- ev
+				case message.ToolCallFinished:
+					if _, ok := p.toolMap[strings.ToLower(ev.Call.Name)]; ok {
+						handledCalls = append(handledCalls, ev.Call)
 					} else {
-						passthroughCalls = append(passthroughCalls, tc)
+						passthroughCalls = append(passthroughCalls, ev.Call)
 					}
 				}
 			}
@@ -88,9 +87,11 @@ func (p *ToolboxProvider) Chat(ctx context.Context, modelName string, messages [
 			// No handled calls — forward passthrough + done
 			if len(handledCalls) == 0 {
 				if len(passthroughCalls) > 0 {
-					out <- message.ChatResponse{ToolCalls: passthroughCalls}
+					for _, tc := range passthroughCalls {
+						out <- message.ToolCallFinished{Call: tc}
+					}
 				}
-				out <- message.ChatResponse{Done: true}
+				out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
 				return
 			}
 
@@ -105,7 +106,7 @@ func (p *ToolboxProvider) Chat(ctx context.Context, modelName string, messages [
 					ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments,
 				})
 			}
-			currentMsgs = append(currentMsgs, message.Message{
+			currentTurns = append(currentTurns, message.Turn{
 				Role: message.RoleAssistant, Parts: assistantParts,
 			})
 
@@ -120,7 +121,7 @@ func (p *ToolboxProvider) Chat(ctx context.Context, modelName string, messages [
 					result = fmt.Sprintf("Error: %v", err)
 				}
 				slog.Debug("toolbox_call_result", "tool", tc.Name, "result_len", len(result), "result", result)
-				currentMsgs = append(currentMsgs, message.Message{
+				currentTurns = append(currentTurns, message.Turn{
 					Role: message.RoleTool,
 					Parts: []message.Part{message.ToolResultPart{
 						ToolCallID: tc.ID,
@@ -131,14 +132,16 @@ func (p *ToolboxProvider) Chat(ctx context.Context, modelName string, messages [
 
 			// Forward passthrough calls
 			if len(passthroughCalls) > 0 {
-				out <- message.ChatResponse{ToolCalls: passthroughCalls}
+				for _, tc := range passthroughCalls {
+					out <- message.ToolCallFinished{Call: tc}
+				}
 			}
 
 			slog.Info("toolbox_requery", "loop", loop+1, "handled", len(handledCalls))
 		}
 
 		slog.Warn("toolbox_max_loops", "max", p.maxLoops)
-		out <- message.ChatResponse{Done: true}
+		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
 	}()
 	return out, nil
 }

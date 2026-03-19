@@ -79,5 +79,5 @@ fast = "gemini:gemini-2.5-flash"         # remaps model name
 All conversions pass through `pkg/message` types, even when client and backend use the same protocol.
 
 ```
-Wire request → message.Message → Provider → message.ChatResponse → Wire response
+Wire request → message.Request/Turn → Provider → message.Event → Wire response
 ```

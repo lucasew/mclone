@@ -12,15 +12,9 @@ const (
 	RoleTool      Role = "tool"
 )
 
-// Message represents a single message in a conversation.
-type Message struct {
-	Role  Role
-	Parts []Part
-}
-
-// TextParts creates a Message with a single text part.
-func TextParts(role Role, text string) Message {
-	return Message{Role: role, Parts: []Part{TextPart{Text: text}}}
+// TextTurn creates a turn with a single text part.
+func TextTurn(role Role, text string) Turn {
+	return Turn{Role: role, Parts: []Part{TextPart{Text: text}}}
 }
 
 // Part is a content part within a message.
@@ -106,13 +100,4 @@ type ToolCall struct {
 // ParseArguments unmarshals the arguments JSON into the target.
 func ParseArguments[T interface{}](tc ToolCall, target *T) error {
 	return json.Unmarshal(tc.Arguments, target)
-}
-
-// ChatResponse represents a streaming chunk from a provider.
-type ChatResponse struct {
-	Content   string
-	ToolCalls []ToolCall
-	Thought   string
-	Done      bool
-	Error     error
 }

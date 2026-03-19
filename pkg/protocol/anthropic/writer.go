@@ -15,7 +15,7 @@ type Writer struct{}
 
 func NewWriter() *Writer { return &Writer{} }
 
-func (w *Writer) ServeResponse(rw http.ResponseWriter, ch <-chan message.ChatResponse, model string, stream bool) {
+func (w *Writer) ServeResponse(rw http.ResponseWriter, ch <-chan message.Event, model string, stream bool) {
 	if stream {
 		w.serveStream(rw, ch, model)
 	} else {
@@ -23,7 +23,7 @@ func (w *Writer) ServeResponse(rw http.ResponseWriter, ch <-chan message.ChatRes
 	}
 }
 
-func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatResponse, model string) {
+func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, model string) {
 	protocol.SetStreamHeaders(rw)
 
 	contentIndex := 0
@@ -44,12 +44,11 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 		ContentBlock: ContentBlock{Type: "text", Text: ""},
 	})
 
-	for resp := range ch {
-		if resp.Error != nil {
-			slog.Error("anthropic_stream_error", "error", resp.Error)
-			continue
-		}
-		if resp.Thought != "" {
+	for event := range ch {
+		switch ev := event.(type) {
+		case message.ResponseError:
+			slog.Error("anthropic_stream_error", "error", ev.Err)
+		case message.ReasoningDelta:
 			protocol.WriteSSE(rw, "content_block_start", ContentBlockStartEvent{
 				Type:         "content_block_start",
 				Index:        contentIndex,
@@ -58,22 +57,19 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
 				Type:  "content_block_delta",
 				Index: contentIndex,
-				Delta: BlockDelta{Type: "text_delta", Text: "<thought>" + resp.Thought + "</thought>"},
+				Delta: BlockDelta{Type: "text_delta", Text: "<thought>" + ev.Text + "</thought>"},
 			})
 			protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
 				Type: "content_block_stop", Index: contentIndex,
 			})
 			contentIndex++
-		}
-		if resp.Content != "" {
+		case message.TextDelta:
 			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
 				Type:  "content_block_delta",
 				Index: contentIndex,
-				Delta: BlockDelta{Type: "text_delta", Text: resp.Content},
+				Delta: BlockDelta{Type: "text_delta", Text: ev.Text},
 			})
-		}
-
-		for _, tc := range resp.ToolCalls {
+		case message.ToolCallFinished:
 			hasCalledTool = true
 
 			protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
@@ -81,28 +77,29 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 			})
 			contentIndex++
 
-			id := tc.ID
+			id := ev.Call.ID
 			if id == "" {
 				id = fmt.Sprintf("toolu_%d", time.Now().UnixNano())
 			}
 
-			slog.Info("sending_tool_use", "name", tc.Name, "id", id)
+			slog.Info("sending_tool_use", "name", ev.Call.Name, "id", id)
 			protocol.WriteSSE(rw, "content_block_start", ContentBlockStartEvent{
 				Type:  "content_block_start",
 				Index: contentIndex,
 				ContentBlock: ContentBlock{
-					Type: "tool_use", ID: id, Name: tc.Name, Input: []byte("{}"),
+					Type: "tool_use", ID: id, Name: ev.Call.Name, Input: []byte("{}"),
 				},
 			})
 			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
 				Type:  "content_block_delta",
 				Index: contentIndex,
-				Delta: BlockDelta{Type: "input_json_delta", PartialJSON: string(tc.Arguments)},
+				Delta: BlockDelta{Type: "input_json_delta", PartialJSON: string(ev.Call.Arguments)},
 			})
 			protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
 				Type: "content_block_stop", Index: contentIndex,
 			})
 			contentIndex++
+		case message.ResponseCompleted:
 		}
 	}
 
@@ -123,16 +120,18 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.ChatRespo
 	protocol.WriteSSE(rw, "message_stop", MessageStopEvent{Type: "message_stop"})
 }
 
-func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.ChatResponse, model string) {
+func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, model string) {
 	var content strings.Builder
 	var toolCalls []message.ToolCall
-	for resp := range ch {
-		if resp.Error != nil {
-			slog.Error("anthropic_json_error", "error", resp.Error)
-			continue
+	for event := range ch {
+		switch ev := event.(type) {
+		case message.TextDelta:
+			content.WriteString(ev.Text)
+		case message.ToolCallFinished:
+			toolCalls = append(toolCalls, ev.Call)
+		case message.ResponseError:
+			slog.Error("anthropic_json_error", "error", ev.Err)
 		}
-		content.WriteString(resp.Content)
-		toolCalls = append(toolCalls, resp.ToolCalls...)
 	}
 
 	resp := MessageResponse{

@@ -33,15 +33,15 @@ func (p *RouteProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return models, nil
 }
 
-func (p *RouteProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	r, ok := p.routes[modelName]
+func (p *RouteProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
+	r, ok := p.routes[req.Model]
 	if !ok {
 		// If exact match not found, maybe try "default" route?
 		// For now, fail.
-		return nil, fmt.Errorf("model %q not configured in route", modelName)
+		return nil, fmt.Errorf("model %q not configured in route", req.Model)
 	}
 
-	actualModel := modelName
+	actualModel := req.Model
 	if r.modelName != "" {
 		actualModel = r.modelName
 	}
@@ -72,8 +72,9 @@ func (p *RouteProvider) Chat(ctx context.Context, modelName string, messages []m
 	// "gpt-4" = "openai:gpt-4"
 	// "claude" = "anthropic:claude-3-opus-20240229"
 
-	slog.Info("route_dispatch", "requested", modelName, "actual", actualModel, "provider", r.provider.Name())
-	return r.provider.Chat(ctx, actualModel, messages, options)
+	slog.Info("route_dispatch", "requested", req.Model, "actual", actualModel, "provider", r.provider.Name())
+	req.Model = actualModel
+	return r.provider.Chat(ctx, req)
 }
 
 func init() {

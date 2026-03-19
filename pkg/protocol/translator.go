@@ -34,7 +34,7 @@ type ContentBlock struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 }
 
-func (m *IncomingMessage) ToMessage() (message.Message, error) {
+func (m *IncomingMessage) ToTurn() (message.Turn, error) {
 	role := message.RoleUser
 	switch m.Role {
 	case "system":
@@ -48,7 +48,7 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 		if err := json.Unmarshal(m.Content, &contentStr); err != nil {
 			contentStr = string(m.Content)
 		}
-		return message.Message{
+		return message.Turn{
 			Role: message.RoleTool,
 			Parts: []message.Part{
 				message.ToolResultPart{
@@ -122,7 +122,7 @@ func (m *IncomingMessage) ToMessage() (message.Message, error) {
 		parts = mergeTextParts(parts)
 	}
 
-	return message.Message{Role: role, Parts: parts}, nil
+	return message.Turn{Role: role, Parts: parts}, nil
 }
 
 func parseText(text string) []message.Part {

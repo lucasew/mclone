@@ -73,27 +73,27 @@ func (p *BalanceProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return all, nil
 }
 
-func (p *BalanceProvider) Chat(ctx context.Context, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	affinityKey := systemHash(messages)
+func (p *BalanceProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
+	affinityKey := systemHash(req.Turns)
 	slog.Info("balance_system_prompt_hash", "hash", affinityKey)
 	b := p.pickBackend(affinityKey)
 	if b == nil {
-		out := make(chan message.ChatResponse)
+		out := make(chan message.Event)
 		go func() {
-			out <- message.ChatResponse{Error: fmt.Errorf("all backends unavailable")}
+			out <- message.ResponseError{Err: fmt.Errorf("all backends unavailable")}
 			close(out)
 		}()
 		return out, nil
 	}
 
-	slog.Info("balance_routing", "backend", b.name, "model", modelName, "affinity", affinityKey[:8])
+	slog.Info("balance_routing", "backend", b.name, "model", req.Model, "affinity", affinityKey[:8])
 
-	ch, err := p.tryBackend(ctx, b, modelName, messages, options)
+	ch, err := p.tryBackend(ctx, b, req)
 	if err != nil {
 		// Initial call failed, try failover
-		return p.failoverFrom(ctx, b, modelName, messages, options, affinityKey)
+		return p.failoverFrom(ctx, b, req, affinityKey)
 	}
-	return p.wrapChannel(ctx, ch, b, modelName, messages, options, affinityKey), nil
+	return p.wrapChannel(ctx, ch, b, req, affinityKey), nil
 }
 
 func (p *BalanceProvider) pickBackend(affinityKey string) *backend {
@@ -131,24 +131,24 @@ func (p *BalanceProvider) pickBackend(affinityKey string) *backend {
 	return nil
 }
 
-func (p *BalanceProvider) tryBackend(ctx context.Context, b *backend, modelName string, messages []message.Message, options message.ChatOptions) (<-chan message.ChatResponse, error) {
-	return b.provider.Chat(ctx, modelName, messages, options)
+func (p *BalanceProvider) tryBackend(ctx context.Context, b *backend, req message.Request) (<-chan message.Event, error) {
+	return b.provider.Chat(ctx, req)
 }
 
 // wrapChannel forwards responses but detects errors for failover.
-func (p *BalanceProvider) wrapChannel(ctx context.Context, ch <-chan message.ChatResponse, b *backend, modelName string, messages []message.Message, options message.ChatOptions, affinityKey string) <-chan message.ChatResponse {
-	out := make(chan message.ChatResponse)
+func (p *BalanceProvider) wrapChannel(ctx context.Context, ch <-chan message.Event, b *backend, req message.Request, affinityKey string) <-chan message.Event {
+	out := make(chan message.Event)
 	go func() {
 		defer close(out)
 		var gotContent bool
 		for resp := range ch {
-			if resp.Error != nil && !gotContent {
-				cooldown := p.handleBackendError(b, resp.Error)
+			if errEvent, ok := resp.(message.ResponseError); ok && !gotContent {
+				cooldown := p.handleBackendError(b, errEvent.Err)
 				b.markUnavailable(cooldown)
 
-				failCh, err := p.failoverFrom(ctx, b, modelName, messages, options, affinityKey)
+				failCh, err := p.failoverFrom(ctx, b, req, affinityKey)
 				if err != nil {
-					out <- message.ChatResponse{Error: err}
+					out <- message.ResponseError{Err: err}
 					return
 				}
 				for r := range failCh {
@@ -156,7 +156,8 @@ func (p *BalanceProvider) wrapChannel(ctx context.Context, ch <-chan message.Cha
 				}
 				return
 			}
-			if resp.Content != "" {
+			switch resp.(type) {
+			case message.TextDelta, message.ReasoningDelta, message.ToolCallDelta, message.ToolCallFinished:
 				gotContent = true
 				b.resetConsecutive()
 			}
@@ -190,7 +191,7 @@ func (p *BalanceProvider) handleBackendError(b *backend, err error) time.Duratio
 	return 30 * time.Second
 }
 
-func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, modelName string, messages []message.Message, options message.ChatOptions, affinityKey string) (<-chan message.ChatResponse, error) {
+func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, req message.Request, affinityKey string) (<-chan message.Event, error) {
 	startIdx := 0
 	for i, b := range p.backends {
 		if b == failed {
@@ -217,8 +218,8 @@ func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, mod
 			time.Sleep(wait)
 		}
 
-		slog.Info("balance_failover", "backend", b.name, "model", modelName)
-		ch, err := b.provider.Chat(ctx, modelName, messages, options)
+		slog.Info("balance_failover", "backend", b.name, "model", req.Model)
+		ch, err := b.provider.Chat(ctx, req)
 		if err != nil {
 			slog.Warn("balance_failover_error", "backend", b.name, "error", err)
 			continue
@@ -230,7 +231,7 @@ func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, mod
 	return nil, fmt.Errorf("all backends exhausted")
 }
 
-func systemHash(messages []message.Message) string {
+func systemHash(messages []message.Turn) string {
 	h := sha256.New()
 	for _, m := range messages {
 		if m.Role == message.RoleSystem {
