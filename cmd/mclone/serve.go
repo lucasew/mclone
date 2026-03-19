@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -202,11 +203,45 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 		reqSpan.RecordError(err)
 		reqSpan.SetStatus(codes.Error, err.Error())
 		monitor.ReportError(r.Context(), err, "action", "chat_failed")
+		if serveRateLimitError(w, writer, err) {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	startedAt := time.Now()
+	firstEventStartedAt := startedAt
+	firstEvent, ok := <-respChan
+	if ok {
+		elapsed := time.Since(firstEventStartedAt)
+		providerSpan.SetAttributes(attribute.Int64("stream.first_event_ms", elapsed.Milliseconds()))
+		providerSpan.AddEvent("first_event")
+		slog.Debug("provider_first_event",
+			"provider", p.Name(),
+			"model", chatModel,
+			"elapsed", elapsed,
+		)
+		if ev, isErr := firstEvent.(message.ResponseError); isErr && serveRateLimitError(w, writer, ev.Err) {
+			providerSpan.RecordError(ev.Err)
+			providerSpan.SetStatus(codes.Error, ev.Err.Error())
+			providerSpan.SetAttributes(
+				attribute.Int("stream.event_count", 1),
+				attribute.Int64("stream.duration_ms", elapsed.Milliseconds()),
+			)
+			providerSpan.End()
+			reqSpan.RecordError(ev.Err)
+			reqSpan.SetStatus(codes.Error, ev.Err.Error())
+			slog.Debug("provider_chat_finished",
+				"provider", p.Name(),
+				"model", chatModel,
+				"elapsed", elapsed,
+				"events", 1,
+			)
+			return
+		}
+	}
+
 	loggedFirstEvent := false
 	instrumented := make(chan message.Event)
 	go func() {
@@ -214,6 +249,17 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 		eventCount := 0
 		var finalErr error
 		var finishReason string
+		if ok {
+			eventCount++
+			loggedFirstEvent = true
+			switch tev := firstEvent.(type) {
+			case message.ResponseCompleted:
+				finishReason = string(tev.Reason)
+			case message.ResponseError:
+				finalErr = tev.Err
+			}
+			instrumented <- firstEvent
+		}
 		for ev := range respChan {
 			eventCount++
 			if !loggedFirstEvent {
@@ -260,6 +306,67 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 	}()
 
 	writer.ServeResponse(w, instrumented, responseModel, req.Stream)
+}
+
+func serveRateLimitError(w http.ResponseWriter, writer protocol.Writer, err error) bool {
+	var rl *message.ErrRateLimit
+	if !errors.As(err, &rl) {
+		return false
+	}
+
+	setRateLimitHeaders(w, writer, rl.RetryAfter)
+	w.WriteHeader(http.StatusTooManyRequests)
+
+	switch writer.(type) {
+	case *openai.Writer:
+		protocol.WriteJSON(w, map[string]any{
+			"error": map[string]any{
+				"message": err.Error(),
+				"type":    "rate_limit_error",
+				"code":    "rate_limit_exceeded",
+			},
+		})
+	case *anthropic.Writer:
+		protocol.WriteJSON(w, map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "rate_limit_error",
+				"message": err.Error(),
+			},
+		})
+	default:
+		protocol.WriteJSON(w, map[string]any{
+			"error": err.Error(),
+		})
+	}
+
+	return true
+}
+
+func setRateLimitHeaders(w http.ResponseWriter, writer protocol.Writer, retryAfter time.Duration) {
+	if retryAfter <= 0 {
+		return
+	}
+
+	seconds := int64((retryAfter + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+
+	switch writer.(type) {
+	case *openai.Writer:
+		reset := (time.Duration(seconds) * time.Second).String()
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+		w.Header().Set("x-ratelimit-reset-requests", reset)
+		w.Header().Set("x-ratelimit-reset-tokens", reset)
+	case *anthropic.Writer:
+		resetAt := time.Now().Add(time.Duration(seconds) * time.Second).UTC().Format(time.RFC3339)
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+		w.Header().Set("anthropic-ratelimit-requests-reset", resetAt)
+		w.Header().Set("anthropic-ratelimit-tokens-reset", resetAt)
+	default:
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	}
 }
 
 type stderrSpanExporter struct{}
