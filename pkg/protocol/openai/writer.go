@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -45,7 +46,7 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 				ID:      "mclone",
 				Object:  "chat.completion.chunk",
 				Model:   model,
-				Choices: []ChunkChoice{{Delta: ChunkDelta{ToolCalls: []message.ToolCall{ev.Call}}}},
+				Choices: []ChunkChoice{{Delta: ChunkDelta{ToolCalls: []ToolCall{toOpenAIToolCall(ev.Call)}}}},
 			})
 		case message.ResponseCompleted:
 			reason := "stop"
@@ -67,7 +68,7 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 
 func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, model string) {
 	var content strings.Builder
-	var toolCalls []message.ToolCall
+	var toolCalls []ToolCall
 	finishReason := "stop"
 	for event := range ch {
 		switch ev := event.(type) {
@@ -78,7 +79,7 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, mode
 			content.WriteString(ev.Text)
 			content.WriteString("</thought>")
 		case message.ToolCallFinished:
-			toolCalls = append(toolCalls, ev.Call)
+			toolCalls = append(toolCalls, toOpenAIToolCall(ev.Call))
 		case message.ResponseCompleted:
 			if ev.Reason == message.StopReasonToolCall {
 				finishReason = "tool_calls"
@@ -105,4 +106,19 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, mode
 
 	rw.Header().Set("Content-Type", "application/json")
 	protocol.WriteJSON(rw, resp)
+}
+
+func toOpenAIToolCall(call message.ToolCall) ToolCall {
+	id := call.ID
+	if id == "" {
+		id = fmt.Sprintf("call_%s", call.Name)
+	}
+	return ToolCall{
+		ID:   id,
+		Type: "function",
+		Function: ToolCallFunction{
+			Name:      call.Name,
+			Arguments: string(call.Arguments),
+		},
+	}
 }

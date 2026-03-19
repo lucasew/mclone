@@ -1,7 +1,5 @@
 package openai
 
-import "github.com/lucasew/mclone/pkg/message"
-
 type ChatCompletionResponse struct {
 	ID      string   `json:"id"`
 	Object  string   `json:"object"`
@@ -15,9 +13,9 @@ type Choice struct {
 }
 
 type Message struct {
-	Role      string             `json:"role"`
-	Content   string             `json:"content"`
-	ToolCalls []message.ToolCall `json:"tool_calls,omitempty"`
+	Role      string         `json:"role"`
+	Content   string         `json:"content"`
+	ToolCalls []ToolCall     `json:"tool_calls,omitempty"`
 }
 
 type ChatCompletionChunk struct {
@@ -33,7 +31,18 @@ type ChunkChoice struct {
 }
 
 type ChunkDelta struct {
-	Role      string             `json:"role,omitempty"`
-	Content   string             `json:"content,omitempty"`
-	ToolCalls []message.ToolCall `json:"tool_calls,omitempty"`
+	Role      string     `json:"role,omitempty"`
+	Content   string     `json:"content,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+}
+
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
+}
+
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
