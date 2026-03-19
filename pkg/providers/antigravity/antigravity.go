@@ -177,7 +177,16 @@ func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan messag
 			reqPayload["systemInstruction"] = sys
 		}
 		if len(req.Options.Tools) > 0 {
-			reqPayload["tools"] = gemini.ToGeminiTools(req.Options.Tools)
+			if isClaudeModel(req.Model) {
+				reqPayload["tools"] = toClaudeAntigravityTools(req.Options.Tools)
+				reqPayload["toolConfig"] = map[string]any{
+					"functionCallingConfig": map[string]any{
+						"mode": "VALIDATED",
+					},
+				}
+			} else {
+				reqPayload["tools"] = gemini.ToGeminiTools(req.Options.Tools)
+			}
 		}
 
 		sessionID := "session-" + generateRandomString(16)
@@ -470,6 +479,61 @@ func isGemini3FlashModel(model string) bool {
 func isImageGenerationModel(model string) bool {
 	model = strings.ToLower(model)
 	return strings.Contains(model, "image") || strings.Contains(model, "imagen")
+}
+
+func isClaudeModel(model string) bool {
+	model = strings.TrimPrefix(strings.ToLower(model), "antigravity-")
+	return strings.Contains(model, "claude")
+}
+
+func toClaudeAntigravityTools(tools []message.ToolDefinition) []map[string]any {
+	result := make([]map[string]any, 0, len(tools))
+	for i, tool := range tools {
+		name := tool.Name
+		if name == "" {
+			name = fmt.Sprintf("tool_%d", i)
+		}
+		name = sanitizeToolName(name)
+
+		schema := tool.Parameters
+		if len(schema) == 0 {
+			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+
+		result = append(result, map[string]any{
+			"custom": map[string]any{
+				"name":         name,
+				"description":  tool.Description,
+				"input_schema": schema,
+			},
+		})
+	}
+	return result
+}
+
+func sanitizeToolName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+		if b.Len() >= 64 {
+			break
+		}
+	}
+	if b.Len() == 0 {
+		return "tool"
+	}
+	return b.String()
 }
 
 func shouldFailoverEndpoint(endpoint string, body []byte) bool {
