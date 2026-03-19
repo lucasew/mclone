@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1562,7 +1563,17 @@ func parseRetryAfter(resp *http.Response, body []byte) time.Duration {
 		}
 	}
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		if d, err := time.ParseDuration(ra + "s"); err == nil {
+		ra = strings.TrimSpace(ra)
+		if d, err := time.ParseDuration(ra); err == nil {
+			delay = d
+		} else if secs, err := strconv.Atoi(ra); err == nil {
+			delay = time.Duration(secs) * time.Second
+		} else if when, err := http.ParseTime(ra); err == nil {
+			delay = time.Until(when)
+			if delay < 0 {
+				delay = 0
+			}
+		} else if d, err := time.ParseDuration(ra + "s"); err == nil {
 			delay = d
 		}
 	}
