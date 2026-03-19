@@ -80,7 +80,7 @@ func (m *IncomingMessage) ToTurn() (message.Turn, error) {
 					parts = append(parts, parseText(b.Text)...)
 				case "tool_use":
 					parts = append(parts, message.ToolCallPart{
-						ID: b.ID, Name: b.Name, Arguments: b.Input,
+						ID: b.ID, Name: b.Name, Arguments: normalizeToolArguments(b.Input),
 					})
 				case "tool_result":
 					id := b.ToolUseID
@@ -113,7 +113,7 @@ func (m *IncomingMessage) ToTurn() (message.Turn, error) {
 	if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 		for _, tc := range m.ToolCalls {
 			parts = append(parts, message.ToolCallPart{
-				ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+				ID: tc.ID, Name: tc.Function.Name, Arguments: normalizeToolArguments(tc.Function.Arguments),
 			})
 		}
 	}
@@ -209,6 +209,36 @@ func mergeTextParts(parts []message.Part) []message.Part {
 	}
 	flush()
 	return result
+}
+
+func normalizeToolArguments(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage("{}")
+	}
+
+	firstByte := firstNonSpaceByte(raw)
+	if firstByte == '{' || firstByte == '[' {
+		return raw
+	}
+
+	if firstByte == '"' {
+		var encoded string
+		if err := json.Unmarshal(raw, &encoded); err == nil {
+			trimmed := strings.TrimSpace(encoded)
+			if trimmed == "" {
+				return json.RawMessage("{}")
+			}
+			if first := firstNonSpaceByte([]byte(trimmed)); first == '{' || first == '[' {
+				return json.RawMessage(trimmed)
+			}
+			b, err := json.Marshal(map[string]string{"input": encoded})
+			if err == nil {
+				return json.RawMessage(b)
+			}
+		}
+	}
+
+	return raw
 }
 
 type Tool struct {

@@ -100,6 +100,9 @@ var serveCmd = &cobra.Command{
 		mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 			serveChatRequest(w, r, p, overrideModel, openaiWriter, cmd, defaultOpts)
 		})
+		mux.HandleFunc("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
+			serveResponsesRequest(w, r, p, overrideModel, cmd, defaultOpts)
+		})
 		mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 			serveModels(w, r, p)
 		})
