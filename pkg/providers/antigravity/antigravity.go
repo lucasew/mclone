@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,20 @@ var modelAliases = map[string]string{
 	"gemini-claude-opus-4-5-thinking":   "claude-opus-4-5-thinking",
 }
 
+var supportedModels = map[string]string{
+	"antigravity-gemini-3-pro":             "Gemini 3 Pro (Antigravity)",
+	"antigravity-gemini-3.1-pro":           "Gemini 3.1 Pro (Antigravity)",
+	"antigravity-gemini-3-flash":           "Gemini 3 Flash (Antigravity)",
+	"antigravity-claude-sonnet-4-6":        "Claude Sonnet 4.6 (Antigravity)",
+	"antigravity-claude-opus-4-6-thinking": "Claude Opus 4.6 Thinking (Antigravity)",
+	"gemini-2.5-flash":                     "Gemini 2.5 Flash (Gemini CLI)",
+	"gemini-2.5-pro":                       "Gemini 2.5 Pro (Gemini CLI)",
+	"gemini-3-flash-preview":               "Gemini 3 Flash Preview (Gemini CLI)",
+	// "gemini-3-pro-preview":              "Gemini 3 Pro Preview (Gemini CLI)", // API says this model is no longer supported.
+	"gemini-3.1-pro-preview":             "Gemini 3.1 Pro Preview (Gemini CLI)",
+	"gemini-3.1-pro-preview-customtools": "Gemini 3.1 Pro Preview Custom Tools (Gemini CLI)",
+}
+
 type Provider struct {
 	base          *gemini.GeminiProvider
 	name          string
@@ -103,22 +118,25 @@ func (p *Provider) List(ctx context.Context) ([]remote.Model, error) {
 	if err := p.ensureToken(ctx); err != nil {
 		return nil, err
 	}
-	return []remote.Model{
-		{Name: "Gemini 3 Pro (Antigravity)", Slug: "antigravity-gemini-3-pro"},
-		{Name: "Gemini 3.1 Pro (Antigravity)", Slug: "antigravity-gemini-3.1-pro"},
-		{Name: "Gemini 3 Flash (Antigravity)", Slug: "antigravity-gemini-3-flash"},
-		{Name: "Claude Sonnet 4.6 (Antigravity)", Slug: "antigravity-claude-sonnet-4-6"},
-		{Name: "Claude Opus 4.6 Thinking (Antigravity)", Slug: "antigravity-claude-opus-4-6-thinking"},
-		{Name: "Gemini 2.5 Flash (Gemini CLI)", Slug: "gemini-2.5-flash"},
-		{Name: "Gemini 2.5 Pro (Gemini CLI)", Slug: "gemini-2.5-pro"},
-		{Name: "Gemini 3 Flash Preview (Gemini CLI)", Slug: "gemini-3-flash-preview"},
-		{Name: "Gemini 3 Pro Preview (Gemini CLI)", Slug: "gemini-3-pro-preview"},
-		{Name: "Gemini 3.1 Pro Preview (Gemini CLI)", Slug: "gemini-3.1-pro-preview"},
-		{Name: "Gemini 3.1 Pro Preview Custom Tools (Gemini CLI)", Slug: "gemini-3.1-pro-preview-customtools"},
-	}, nil
+	models := make([]remote.Model, 0, len(supportedModels))
+	for slug, name := range supportedModels {
+		models = append(models, remote.Model{Name: name, Slug: slug})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].Slug < models[j].Slug
+	})
+	return models, nil
 }
 
 func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
+	if !isSupportedModel(req.Model) {
+		out := make(chan message.Event)
+		go func() {
+			defer close(out)
+			out <- message.ResponseError{Err: fmt.Errorf("model %q does not exist in antigravity", req.Model)}
+		}()
+		return out, nil
+	}
 	if err := p.ensureToken(ctx); err != nil {
 		out := make(chan message.Event)
 		go func() {
@@ -1090,6 +1108,11 @@ func uniqueStrings(values []string) []string {
 		}
 	}
 	return out
+}
+
+func isSupportedModel(model string) bool {
+	_, ok := supportedModels[model]
+	return ok
 }
 
 func sanitizeToolName(name string) string {
