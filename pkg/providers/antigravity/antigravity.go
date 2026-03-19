@@ -521,7 +521,7 @@ func sanitizeToolSchema(raw json.RawMessage) json.RawMessage {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return raw
 	}
-	cleaned := sanitizeSchemaValue(value)
+	cleaned := cleanJSONSchemaForAntigravity(value)
 	out, err := json.Marshal(cleaned)
 	if err != nil {
 		return raw
@@ -529,26 +529,562 @@ func sanitizeToolSchema(raw json.RawMessage) json.RawMessage {
 	return out
 }
 
-func sanitizeSchemaValue(v any) any {
-	switch x := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			switch k {
-			case "$schema", "propertyNames", "const", "exclusiveMinimum", "exclusiveMaximum":
-				continue
-			}
-			out[k] = sanitizeSchemaValue(vv)
+func cleanJSONSchemaForAntigravity(schema any) any {
+	if schema == nil {
+		return nil
+	}
+	result := convertRefsToHints(schema)
+	result = convertConstToEnum(result)
+	result = addEnumHints(result)
+	result = addAdditionalPropertiesHints(result)
+	result = moveConstraintsToDescription(result)
+	result = mergeAllOf(result)
+	result = flattenAnyOfOneOf(result)
+	result = flattenTypeArrays(result)
+	result = removeUnsupportedKeywords(result, false)
+	result = cleanupRequiredFields(result)
+	result = addEmptySchemaPlaceholder(result)
+	return result
+}
+
+func appendDescriptionHint(schema map[string]any, hint string) map[string]any {
+	existing, _ := schema["description"].(string)
+	if existing != "" {
+		schema["description"] = existing + " (" + hint + ")"
+	} else {
+		schema["description"] = hint
+	}
+	return schema
+}
+
+func convertRefsToHints(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = convertRefsToHints(item)
 		}
 		return out
-	case []any:
-		for i := range x {
-			x[i] = sanitizeSchemaValue(x[i])
+	case map[string]any:
+		if ref, ok := x["$ref"].(string); ok {
+			defName := ref
+			if idx := strings.LastIndex(ref, "/"); idx >= 0 && idx+1 < len(ref) {
+				defName = ref[idx+1:]
+			}
+			out := map[string]any{"type": "object"}
+			if desc, _ := x["description"].(string); desc != "" {
+				out["description"] = desc + " (See: " + defName + ")"
+			} else {
+				out["description"] = "See: " + defName
+			}
+			return out
 		}
-		return x
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			out[k] = convertRefsToHints(v)
+		}
+		return out
 	default:
-		return v
+		return schema
 	}
+}
+
+func convertConstToEnum(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = convertConstToEnum(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			if k == "const" {
+				if _, hasEnum := x["enum"]; !hasEnum {
+					out["enum"] = []any{v}
+				}
+				continue
+			}
+			out[k] = convertConstToEnum(v)
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+func addEnumHints(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = addEnumHints(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			if k != "enum" {
+				out[k] = addEnumHints(v)
+			} else {
+				out[k] = v
+			}
+		}
+		if enumVals, ok := out["enum"].([]any); ok && len(enumVals) > 1 && len(enumVals) <= 10 {
+			var vals []string
+			for _, v := range enumVals {
+				vals = append(vals, fmt.Sprint(v))
+			}
+			out = appendDescriptionHint(out, "Allowed: "+strings.Join(vals, ", "))
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+func addAdditionalPropertiesHints(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = addAdditionalPropertiesHints(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			if k != "additionalProperties" {
+				out[k] = addAdditionalPropertiesHints(v)
+			} else {
+				out[k] = v
+			}
+		}
+		if ap, ok := out["additionalProperties"].(bool); ok && !ap {
+			out = appendDescriptionHint(out, "No extra properties allowed")
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+var unsupportedConstraints = map[string]struct{}{
+	"minLength": {}, "maxLength": {}, "exclusiveMinimum": {}, "exclusiveMaximum": {},
+	"pattern": {}, "minItems": {}, "maxItems": {}, "format": {},
+	"default": {}, "examples": {},
+}
+
+func moveConstraintsToDescription(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = moveConstraintsToDescription(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			out[k] = moveConstraintsToDescription(v)
+		}
+		for constraint := range unsupportedConstraints {
+			if v, ok := out[constraint]; ok {
+				switch v.(type) {
+				case map[string]any, []any:
+				default:
+					out = appendDescriptionHint(out, fmt.Sprintf("%s: %v", constraint, v))
+				}
+			}
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+func mergeAllOf(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = mergeAllOf(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			out[k] = mergeAllOf(v)
+		}
+		if allOf, ok := out["allOf"].([]any); ok && len(allOf) > 0 {
+			merged := map[string]any{}
+			var mergedRequired []string
+			for _, item := range allOf {
+				part, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				if props, ok := part["properties"].(map[string]any); ok {
+					current, _ := merged["properties"].(map[string]any)
+					if current == nil {
+						current = map[string]any{}
+					}
+					for pk, pv := range props {
+						current[pk] = pv
+					}
+					merged["properties"] = current
+				}
+				if reqs, ok := part["required"].([]any); ok {
+					for _, req := range reqs {
+						if s, ok := req.(string); ok && !containsString(mergedRequired, s) {
+							mergedRequired = append(mergedRequired, s)
+						}
+					}
+				}
+				for pk, pv := range part {
+					if pk != "properties" && pk != "required" {
+						if _, exists := merged[pk]; !exists {
+							merged[pk] = pv
+						}
+					}
+				}
+			}
+			if props, ok := merged["properties"].(map[string]any); ok {
+				current, _ := out["properties"].(map[string]any)
+				if current == nil {
+					current = map[string]any{}
+				}
+				for k, v := range props {
+					current[k] = v
+				}
+				out["properties"] = current
+			}
+			if len(mergedRequired) > 0 {
+				var existing []string
+				if reqs, ok := out["required"].([]any); ok {
+					for _, req := range reqs {
+						if s, ok := req.(string); ok {
+							existing = append(existing, s)
+						}
+					}
+				}
+				for _, req := range mergedRequired {
+					if !containsString(existing, req) {
+						existing = append(existing, req)
+					}
+				}
+				reqs := make([]any, len(existing))
+				for i, v := range existing {
+					reqs[i] = v
+				}
+				out["required"] = reqs
+			}
+			for k, v := range merged {
+				if k != "properties" && k != "required" {
+					if _, exists := out[k]; !exists {
+						out[k] = v
+					}
+				}
+			}
+			delete(out, "allOf")
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+func flattenAnyOfOneOf(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = flattenAnyOfOneOf(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			out[k] = flattenAnyOfOneOf(v)
+		}
+		for _, unionKey := range []string{"anyOf", "oneOf"} {
+			options, ok := out[unionKey].([]any)
+			if !ok || len(options) == 0 {
+				continue
+			}
+			if mergedEnum := tryMergeEnumFromUnion(options); mergedEnum != nil {
+				delete(out, unionKey)
+				out["type"] = "string"
+				enumVals := make([]any, len(mergedEnum))
+				for i, v := range mergedEnum {
+					enumVals[i] = v
+				}
+				out["enum"] = enumVals
+				continue
+			}
+			bestIdx, allTypes := scoreBestUnionOption(options)
+			selected, _ := flattenAnyOfOneOf(options[bestIdx]).(map[string]any)
+			if selected == nil {
+				selected = map[string]any{"type": "string"}
+			}
+			if parentDesc, _ := out["description"].(string); parentDesc != "" {
+				if childDesc, _ := selected["description"].(string); childDesc != "" && childDesc != parentDesc {
+					selected["description"] = parentDesc + " (" + childDesc + ")"
+				} else if childDesc == "" {
+					selected["description"] = parentDesc
+				}
+			}
+			if len(allTypes) > 1 {
+				selected = appendDescriptionHint(selected, "Accepts: "+strings.Join(uniqueStrings(allTypes), " | "))
+			}
+			delete(out, unionKey)
+			delete(out, "description")
+			for k, v := range selected {
+				out[k] = v
+			}
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+func flattenTypeArrays(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = flattenTypeArrays(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			out[k] = flattenTypeArrays(v)
+		}
+		if types, ok := out["type"].([]any); ok && len(types) > 0 {
+			var nonNull []string
+			hasNull := false
+			for _, t := range types {
+				if s, ok := t.(string); ok {
+					if s == "null" {
+						hasNull = true
+					} else {
+						nonNull = append(nonNull, s)
+					}
+				}
+			}
+			firstType := "string"
+			if len(nonNull) > 0 {
+				firstType = nonNull[0]
+			}
+			out["type"] = firstType
+			if len(nonNull) > 1 {
+				out = appendDescriptionHint(out, "Accepts: "+strings.Join(nonNull, " | "))
+			}
+			if hasNull {
+				out = appendDescriptionHint(out, "nullable")
+			}
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+var unsupportedKeywords = map[string]struct{}{
+	"$schema": {}, "$defs": {}, "definitions": {}, "const": {}, "$ref": {}, "additionalProperties": {},
+	"propertyNames": {}, "title": {}, "$id": {}, "$comment": {},
+	"minLength": {}, "maxLength": {}, "exclusiveMinimum": {}, "exclusiveMaximum": {},
+	"pattern": {}, "minItems": {}, "maxItems": {}, "format": {}, "default": {}, "examples": {},
+}
+
+func removeUnsupportedKeywords(schema any, insideProperties bool) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = removeUnsupportedKeywords(item, false)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			if !insideProperties {
+				if _, banned := unsupportedKeywords[k]; banned {
+					continue
+				}
+			}
+			if k == "properties" {
+				props := map[string]any{}
+				if propMap, ok := v.(map[string]any); ok {
+					for pk, pv := range propMap {
+						props[pk] = removeUnsupportedKeywords(pv, false)
+					}
+				}
+				out[k] = props
+				continue
+			}
+			out[k] = removeUnsupportedKeywords(v, false)
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+func cleanupRequiredFields(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = cleanupRequiredFields(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			out[k] = cleanupRequiredFields(v)
+		}
+		reqs, hasReqs := out["required"].([]any)
+		props, hasProps := out["properties"].(map[string]any)
+		if hasReqs && hasProps {
+			var valid []any
+			for _, req := range reqs {
+				if s, ok := req.(string); ok {
+					if _, exists := props[s]; exists {
+						valid = append(valid, s)
+					}
+				}
+			}
+			if len(valid) == 0 {
+				delete(out, "required")
+			} else {
+				out["required"] = valid
+			}
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+func addEmptySchemaPlaceholder(schema any) any {
+	switch x := schema.(type) {
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = addEmptySchemaPlaceholder(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			out[k] = addEmptySchemaPlaceholder(v)
+		}
+		if out["type"] == "object" {
+			props, _ := out["properties"].(map[string]any)
+			if len(props) == 0 {
+				out["properties"] = map[string]any{
+					"_placeholder": map[string]any{
+						"type":        "boolean",
+						"description": "Placeholder. Always pass true.",
+					},
+				}
+				out["required"] = []any{"_placeholder"}
+			}
+		}
+		return out
+	default:
+		return schema
+	}
+}
+
+func tryMergeEnumFromUnion(options []any) []string {
+	var enumValues []string
+	for _, option := range options {
+		obj, ok := option.(map[string]any)
+		if !ok {
+			return nil
+		}
+		if v, ok := obj["const"]; ok {
+			enumValues = append(enumValues, fmt.Sprint(v))
+			continue
+		}
+		if enum, ok := obj["enum"].([]any); ok && len(enum) > 0 {
+			for _, v := range enum {
+				enumValues = append(enumValues, fmt.Sprint(v))
+			}
+			continue
+		}
+		if obj["properties"] != nil || obj["items"] != nil || obj["anyOf"] != nil || obj["oneOf"] != nil || obj["allOf"] != nil {
+			return nil
+		}
+		if obj["type"] != nil {
+			return nil
+		}
+	}
+	if len(enumValues) == 0 {
+		return nil
+	}
+	return enumValues
+}
+
+func scoreBestUnionOption(options []any) (int, []string) {
+	bestIdx := 0
+	bestScore := -1
+	var allTypes []string
+	for i, option := range options {
+		score, typeName := scoreSchemaOption(option)
+		if typeName != "" {
+			allTypes = append(allTypes, typeName)
+		}
+		if score > bestScore {
+			bestScore = score
+			bestIdx = i
+		}
+	}
+	return bestIdx, allTypes
+}
+
+func scoreSchemaOption(schema any) (int, string) {
+	obj, ok := schema.(map[string]any)
+	if !ok {
+		return 0, "unknown"
+	}
+	if t, _ := obj["type"].(string); t == "object" || obj["properties"] != nil {
+		return 3, "object"
+	}
+	if t, _ := obj["type"].(string); t == "array" || obj["items"] != nil {
+		return 2, "array"
+	}
+	if t, _ := obj["type"].(string); t != "" && t != "null" {
+		return 1, t
+	}
+	if t, _ := obj["type"].(string); t != "" {
+		return 0, t
+	}
+	return 0, "null"
+}
+
+func containsString(values []string, target string) bool {
+	for _, v := range values {
+		if v == target {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueStrings(values []string) []string {
+	var out []string
+	for _, v := range values {
+		if !containsString(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func sanitizeToolName(name string) string {
