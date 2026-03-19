@@ -137,6 +137,11 @@ func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan messag
 			var newParts []message.Part
 			for _, p := range m.Parts {
 				if tc, ok := p.(message.ToolCallPart); ok {
+					if tc.Name == "" {
+						tc.Name = "tool"
+					} else {
+						tc.Name = sanitizeToolName(tc.Name)
+					}
 					if len(tc.ThoughtSignature) == 0 {
 						tc.ThoughtSignature = []byte("skip_thought_signature_validator")
 					}
@@ -1088,6 +1093,10 @@ func uniqueStrings(values []string) []string {
 }
 
 func sanitizeToolName(name string) string {
+	if name == "" {
+		return "tool"
+	}
+
 	var b strings.Builder
 	for _, r := range name {
 		switch {
@@ -1097,19 +1106,27 @@ func sanitizeToolName(name string) string {
 			b.WriteRune(r)
 		case r >= '0' && r <= '9':
 			b.WriteRune(r)
-		case r == '_' || r == '-':
+		case r == '_' || r == '-' || r == '.' || r == ':':
 			b.WriteRune(r)
 		default:
 			b.WriteByte('_')
 		}
-		if b.Len() >= 64 {
+		if b.Len() >= 128 {
 			break
 		}
 	}
-	if b.Len() == 0 {
+	sanitized := b.String()
+	if sanitized == "" {
 		return "tool"
 	}
-	return b.String()
+	first := sanitized[0]
+	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+		sanitized = "_" + sanitized
+	}
+	if len(sanitized) > 128 {
+		sanitized = sanitized[:128]
+	}
+	return sanitized
 }
 
 func shouldFailoverEndpoint(endpoint string, body []byte) bool {

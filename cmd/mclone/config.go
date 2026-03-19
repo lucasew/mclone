@@ -30,6 +30,48 @@ func toAnyMap(m map[string]string) map[string]any {
 	return out
 }
 
+type baseURLPreset struct {
+	Label string
+	URL   string
+}
+
+func promptBaseURL(reader *bufio.Reader, provider string, presets []baseURLPreset, defaultURL string) string {
+	fmt.Printf("Select %s base URL:\n", provider)
+	for i, preset := range presets {
+		fmt.Printf("%d) %s", i+1, preset.Label)
+		if preset.URL != "" {
+			fmt.Printf(" (%s)", preset.URL)
+		}
+		fmt.Println()
+	}
+	fmt.Printf("%d) Custom URL\n", len(presets)+1)
+	fmt.Print("Choice (number or URL, blank for default): ")
+
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		return defaultURL
+	}
+
+	var idx int
+	if _, err := fmt.Sscanf(choice, "%d", &idx); err == nil {
+		if idx > 0 && idx <= len(presets) {
+			return presets[idx-1].URL
+		}
+		if idx == len(presets)+1 {
+			fmt.Print("Enter custom base URL: ")
+			url, _ := reader.ReadString('\n')
+			return strings.TrimSpace(url)
+		}
+	}
+
+	if strings.HasPrefix(choice, "http://") || strings.HasPrefix(choice, "https://") {
+		return choice
+	}
+
+	return defaultURL
+}
+
 func interactiveConfig(ctx context.Context) {
 	loader := config.LoaderFrom(ctx)
 	reader := bufio.NewReader(os.Stdin)
@@ -141,14 +183,22 @@ func interactiveConfig(ctx context.Context) {
 				}
 				options["base_url"] = url
 			case "openai":
-				fmt.Print("Enter base URL (default https://api.openai.com/v1): ")
-				url, _ := reader.ReadString('\n')
-				url = strings.TrimSpace(url)
+				url := promptBaseURL(reader, "OpenAI", []baseURLPreset{
+					{Label: "OpenAI", URL: "https://api.openai.com/v1"},
+					{Label: "OpenRouter", URL: "https://openrouter.ai/api/v1"},
+					{Label: "LM Studio", URL: "http://localhost:1234/v1"},
+					{Label: "Ollama OpenAI API", URL: "http://localhost:11434/v1"},
+				}, "https://api.openai.com/v1")
 				options["base_url"] = url
 				fmt.Print("Enter API Key: ")
 				key, _ := reader.ReadString('\n')
 				options["api_key"] = strings.TrimSpace(key)
 			case "anthropic":
+				url := promptBaseURL(reader, "Anthropic", []baseURLPreset{
+					{Label: "Anthropic", URL: "https://api.anthropic.com"},
+					{Label: "Anthropic-compatible local/proxy", URL: "http://localhost:8080"},
+				}, "https://api.anthropic.com")
+				options["base_url"] = url
 				fmt.Print("Enter API Key: ")
 				key, _ := reader.ReadString('\n')
 				options["api_key"] = strings.TrimSpace(key)

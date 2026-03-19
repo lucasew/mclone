@@ -443,7 +443,7 @@ func ToGeminiContents(messages []message.Turn) ([]*genai.Content, *genai.Content
 
 func ToGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
 	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
-	for _, t := range tools {
+	for i, t := range tools {
 		if t.Type != "" && t.Type != "function" {
 			slog.Debug("gemini_skip_tool", "name", t.Name, "type", t.Type)
 			continue
@@ -461,11 +461,50 @@ func ToGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
 		if desc == "" {
 			desc = t.Name
 		}
+		name := sanitizeGeminiToolName(t.Name, i)
 		decls = append(decls, &genai.FunctionDeclaration{
-			Name: t.Name, Description: desc, ParametersJsonSchema: params,
+			Name: name, Description: desc, ParametersJsonSchema: params,
 		})
 	}
 	return []*genai.Tool{{FunctionDeclarations: decls}}
+}
+
+func sanitizeGeminiToolName(name string, index int) string {
+	if name == "" {
+		name = fmt.Sprintf("tool_%d", index)
+	}
+
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '.' || r == ':' || r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+		if b.Len() >= 128 {
+			break
+		}
+	}
+
+	sanitized := b.String()
+	if sanitized == "" {
+		return fmt.Sprintf("tool_%d", index)
+	}
+	first := sanitized[0]
+	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+		sanitized = "_" + sanitized
+	}
+	if len(sanitized) > 128 {
+		sanitized = sanitized[:128]
+	}
+	return sanitized
 }
 
 // cleanSchema recursively removes JSON Schema fields that Gemini doesn't support.
