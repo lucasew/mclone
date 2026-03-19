@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 	"github.com/lucasew/mclone/pkg/config"
@@ -21,6 +22,11 @@ import (
 	"github.com/lucasew/mclone/pkg/protocol/openai"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type chatRequest struct {
@@ -56,6 +62,12 @@ var serveCmd = &cobra.Command{
 			level = slog.LevelDebug
 		}
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+		shutdownTracing := setupTracing(verbose)
+		defer func() {
+			if err := shutdownTracing(cmd.Context()); err != nil {
+				monitor.ReportError(cmd.Context(), err, "action", "shutdown_tracing")
+			}
+		}()
 
 		loader := config.LoaderFrom(cmd.Context())
 		conf, err := loader.Load()
@@ -110,6 +122,16 @@ var serveCmd = &cobra.Command{
 }
 
 func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider, overrideModel string, writer protocol.Writer, cmd *cobra.Command, defaultOpts message.ChatOptions) {
+	ctx, reqSpan := otel.Tracer("mclone/serve").Start(r.Context(), "serve.chat_request",
+		trace.WithAttributes(
+			attribute.String("http.method", r.Method),
+			attribute.String("http.route", r.URL.Path),
+			attribute.String("provider.name", p.Name()),
+		),
+	)
+	defer reqSpan.End()
+	r = r.WithContext(ctx)
+
 	var req chatRequest
 	var bodyReader io.Reader = r.Body
 
@@ -134,6 +156,11 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 	if overrideModel != "" {
 		chatModel = overrideModel
 	}
+	reqSpan.SetAttributes(
+		attribute.String("model.requested", req.Model),
+		attribute.String("model.actual", chatModel),
+		attribute.Bool("response.stream", req.Stream),
+	)
 
 	slog.Info("incoming request", "req_model", req.Model, "chat_model", chatModel)
 
@@ -156,18 +183,123 @@ func serveChatRequest(w http.ResponseWriter, r *http.Request, p remote.Provider,
 	opts.Stop = mergeStop(req.Stop, req.StopSequences)
 	opts = opts.WithDefaults(defaultOpts)
 
-	respChan, err := p.Chat(r.Context(), message.Request{
+	providerCtx, providerSpan := otel.Tracer("mclone/provider").Start(r.Context(), "provider.chat",
+		trace.WithAttributes(
+			attribute.String("provider.name", p.Name()),
+			attribute.String("model.requested", req.Model),
+			attribute.String("model.actual", chatModel),
+		),
+	)
+	respChan, err := p.Chat(providerCtx, message.Request{
 		Model:   chatModel,
 		Turns:   turns,
 		Options: opts,
 	})
 	if err != nil {
+		providerSpan.RecordError(err)
+		providerSpan.SetStatus(codes.Error, err.Error())
+		providerSpan.End()
+		reqSpan.RecordError(err)
+		reqSpan.SetStatus(codes.Error, err.Error())
 		monitor.ReportError(r.Context(), err, "action", "chat_failed")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	writer.ServeResponse(w, respChan, responseModel, req.Stream)
+	startedAt := time.Now()
+	loggedFirstEvent := false
+	instrumented := make(chan message.Event)
+	go func() {
+		defer close(instrumented)
+		eventCount := 0
+		var finalErr error
+		var finishReason string
+		for ev := range respChan {
+			eventCount++
+			if !loggedFirstEvent {
+				loggedFirstEvent = true
+				elapsed := time.Since(startedAt)
+				providerSpan.SetAttributes(attribute.Int64("stream.first_event_ms", elapsed.Milliseconds()))
+				providerSpan.AddEvent("first_event")
+				slog.Debug("provider_first_event",
+					"provider", p.Name(),
+					"model", chatModel,
+					"elapsed", elapsed,
+				)
+			}
+			switch tev := ev.(type) {
+			case message.ResponseCompleted:
+				finishReason = string(tev.Reason)
+			case message.ResponseError:
+				finalErr = tev.Err
+			}
+			instrumented <- ev
+		}
+		providerSpan.SetAttributes(
+			attribute.Int("stream.event_count", eventCount),
+			attribute.Int64("stream.duration_ms", time.Since(startedAt).Milliseconds()),
+		)
+		if finishReason != "" {
+			providerSpan.SetAttributes(attribute.String("stream.finish_reason", finishReason))
+		}
+		if finalErr != nil {
+			providerSpan.RecordError(finalErr)
+			providerSpan.SetStatus(codes.Error, finalErr.Error())
+			reqSpan.RecordError(finalErr)
+			reqSpan.SetStatus(codes.Error, finalErr.Error())
+		} else {
+			providerSpan.SetStatus(codes.Ok, "")
+		}
+		providerSpan.End()
+		slog.Debug("provider_chat_finished",
+			"provider", p.Name(),
+			"model", chatModel,
+			"elapsed", time.Since(startedAt),
+			"events", eventCount,
+		)
+	}()
+
+	writer.ServeResponse(w, instrumented, responseModel, req.Stream)
+}
+
+type stderrSpanExporter struct{}
+
+func (stderrSpanExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	enc := json.NewEncoder(os.Stderr)
+	for _, span := range spans {
+		record := map[string]any{
+			"type":           "otel_span",
+			"name":           span.Name(),
+			"trace_id":       span.SpanContext().TraceID().String(),
+			"span_id":        span.SpanContext().SpanID().String(),
+			"parent_span_id": span.Parent().SpanID().String(),
+			"start":          span.StartTime(),
+			"end":            span.EndTime(),
+			"duration_ms":    span.EndTime().Sub(span.StartTime()).Milliseconds(),
+			"attributes":     span.Attributes(),
+			"status_code":    span.Status().Code.String(),
+			"status_message": span.Status().Description,
+		}
+		if err := enc.Encode(record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (stderrSpanExporter) Shutdown(context.Context) error {
+	return nil
+}
+
+func setupTracing(verbose bool) func(context.Context) error {
+	if !verbose {
+		return func(context.Context) error { return nil }
+	}
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(stderrSpanExporter{})),
+	)
+	otel.SetTracerProvider(provider)
+	return provider.Shutdown
 }
 
 func parseMessages(ctx context.Context, req chatRequest) []message.Turn {
