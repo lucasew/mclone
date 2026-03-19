@@ -192,7 +192,6 @@ func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan messag
 		sessionID := "session-" + generateRandomString(16)
 		reqPayload["sessionId"] = sessionID
 		wrappedBody := map[string]interface{}{
-			"project":     p.token.ProjectID,
 			"model":       normalizeGeminiModel(req.Model),
 			"request":     reqPayload,
 			"requestType": "agent",
@@ -200,6 +199,7 @@ func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan messag
 			"requestId":   "agent-" + generateRandomString(16),
 		}
 		if p.token.ProjectID != "" {
+			wrappedBody["project"] = p.token.ProjectID
 			slog.Info("antigravity_chat_project", "project_id", p.token.ProjectID)
 		} else {
 			slog.Warn("antigravity_chat_no_project", "msg", "Project ID missing, request might fail")
@@ -487,7 +487,7 @@ func isClaudeModel(model string) bool {
 }
 
 func toClaudeAntigravityTools(tools []message.ToolDefinition) []map[string]any {
-	result := make([]map[string]any, 0, len(tools))
+	functionDeclarations := make([]map[string]any, 0, len(tools))
 	for i, tool := range tools {
 		name := tool.Name
 		if name == "" {
@@ -498,17 +498,57 @@ func toClaudeAntigravityTools(tools []message.ToolDefinition) []map[string]any {
 		schema := tool.Parameters
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+		} else {
+			schema = sanitizeToolSchema(schema)
 		}
 
-		result = append(result, map[string]any{
-			"custom": map[string]any{
-				"name":         name,
-				"description":  tool.Description,
-				"input_schema": schema,
-			},
+		functionDeclarations = append(functionDeclarations, map[string]any{
+			"name":        name,
+			"description": tool.Description,
+			"parameters":  schema,
 		})
 	}
-	return result
+	if len(functionDeclarations) == 0 {
+		return nil
+	}
+	return []map[string]any{{
+		"functionDeclarations": functionDeclarations,
+	}}
+}
+
+func sanitizeToolSchema(raw json.RawMessage) json.RawMessage {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return raw
+	}
+	cleaned := sanitizeSchemaValue(value)
+	out, err := json.Marshal(cleaned)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func sanitizeSchemaValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, vv := range x {
+			switch k {
+			case "$schema", "propertyNames", "const", "exclusiveMinimum", "exclusiveMaximum":
+				continue
+			}
+			out[k] = sanitizeSchemaValue(vv)
+		}
+		return out
+	case []any:
+		for i := range x {
+			x[i] = sanitizeSchemaValue(x[i])
+		}
+		return x
+	default:
+		return v
+	}
 }
 
 func sanitizeToolName(name string) string {
@@ -624,6 +664,18 @@ type TokenData struct {
 func (p *Provider) ensureToken(ctx context.Context) error {
 	token, err := p.loadToken()
 	if err == nil && token != nil && time.Now().Add(time.Minute).Before(token.ExpiresAt) {
+		if token.ProjectID == "" {
+			slog.Info("antigravity_project_missing_on_token")
+			pid, onboardErr := p.onboardManagedProject(ctx, token.AccessToken)
+			if onboardErr != nil {
+				monitor.ReportError(ctx, onboardErr, "action", "antigravity_onboard_missing_project_failed")
+			} else {
+				token.ProjectID = pid
+				if saveErr := p.saveToken(token); saveErr != nil {
+					monitor.ReportError(ctx, saveErr, "action", "antigravity_save_token_failed")
+				}
+			}
+		}
 		p.base.APIKey = token.AccessToken
 		return nil
 	}
@@ -631,6 +683,18 @@ func (p *Provider) ensureToken(ctx context.Context) error {
 	defer p.loginMu.Unlock()
 	token, err = p.loadToken()
 	if err == nil && token != nil && time.Now().Add(time.Minute).Before(token.ExpiresAt) {
+		if token.ProjectID == "" {
+			slog.Info("antigravity_project_missing_on_token")
+			pid, onboardErr := p.onboardManagedProject(ctx, token.AccessToken)
+			if onboardErr != nil {
+				monitor.ReportError(ctx, onboardErr, "action", "antigravity_onboard_missing_project_failed")
+			} else {
+				token.ProjectID = pid
+				if saveErr := p.saveToken(token); saveErr != nil {
+					monitor.ReportError(ctx, saveErr, "action", "antigravity_save_token_failed")
+				}
+			}
+		}
 		p.base.APIKey = token.AccessToken
 		return nil
 	}
@@ -638,6 +702,14 @@ func (p *Provider) ensureToken(ctx context.Context) error {
 		slog.Info("antigravity_refreshing_token")
 		newToken, err := p.refreshToken(token.RefreshToken)
 		if err == nil {
+			if newToken.ProjectID == "" {
+				pid, onboardErr := p.onboardManagedProject(ctx, newToken.AccessToken)
+				if onboardErr != nil {
+					monitor.ReportError(ctx, onboardErr, "action", "antigravity_onboard_missing_project_failed")
+				} else {
+					newToken.ProjectID = pid
+				}
+			}
 			if err := p.saveToken(newToken); err != nil {
 				monitor.ReportError(ctx, err, "action", "antigravity_save_token_failed")
 			}
