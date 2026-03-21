@@ -67,7 +67,7 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 	resolve.Exported = func() (Provider, error) {
 		var remoteNames []string
 		for name, rc := range conf.Remotes {
-			if rc.Export && rc.Type != "" {
+			if rc.Export {
 				remoteNames = append(remoteNames, name)
 			}
 		}

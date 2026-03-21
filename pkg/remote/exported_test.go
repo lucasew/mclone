@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lucasew/mclone/pkg/config"
@@ -85,6 +86,60 @@ func TestExportedProviderDetectsConflicts(t *testing.T) {
 
 	if _, err := provider.List(context.Background()); err == nil {
 		t.Fatal("expected conflict error, got nil")
+	}
+}
+
+func TestExportedProviderIncludesImplicitBalanceGroup(t *testing.T) {
+	orig := registry
+	registry = map[string]Factory{}
+	t.Cleanup(func() { registry = orig })
+
+	Register("test_exported_group", func(name string, options map[string]any, resolve Resolver) (Provider, error) {
+		slug, _ := options["slug"].(string)
+		return &testProvider{models: []Model{{Slug: slug, Name: name}}}, nil
+	})
+
+	Register("balance", func(name string, options map[string]any, resolve Resolver) (Provider, error) {
+		remotesCSV, _ := options["remotes"].(string)
+		remoteNames := strings.Split(remotesCSV, ",")
+		var models []Model
+		for _, remoteName := range remoteNames {
+			prov, err := resolve.Provider(remoteName)
+			if err != nil {
+				return nil, err
+			}
+			listed, err := prov.List(context.Background())
+			if err != nil {
+				return nil, err
+			}
+			models = append(models, listed...)
+		}
+		return &testProvider{models: models}, nil
+	})
+
+	conf := &config.Config{
+		Remotes: map[string]config.RemoteConfig{
+			"gemini":   {Export: true},
+			"gemini:1": {Type: "test_exported_group", Options: map[string]any{"slug": "alpha"}},
+			"gemini:2": {Type: "test_exported_group", Options: map[string]any{"slug": "beta"}},
+		},
+	}
+
+	resolve := NewResolver(writeTestConfig(t, conf))
+	provider, err := resolve.Exported()
+	if err != nil {
+		t.Fatalf("Exported() error = %v", err)
+	}
+
+	models, err := provider.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+	if models[0].Slug != "alpha" || models[1].Slug != "beta" {
+		t.Fatalf("unexpected models: %#v", models)
 	}
 }
 
