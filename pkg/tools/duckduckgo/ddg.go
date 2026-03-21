@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	urlRegex        = regexp.MustCompile(`uddg=([^&"]*)`)
+	urlRegex         = regexp.MustCompile(`uddg=([^&"]*)`)
 	searchToolSchema = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"The search query"}},"required":["query"]}`)
 )
 

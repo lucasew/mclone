@@ -27,6 +27,7 @@ func LoaderFrom(ctx context.Context) *ConfigLoader {
 
 type RemoteConfig struct {
 	Type    string         `toml:"type"`
+	Export  bool           `toml:"export"`
 	Options map[string]any `toml:"options"`
 }
 
@@ -76,9 +77,9 @@ func (c *ConfigLoader) Load() (*Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &Config{
-			Remotes: make(map[string]RemoteConfig),
-			Tools:   make(map[string]ToolConfig),
-		}, nil
+				Remotes: make(map[string]RemoteConfig),
+				Tools:   make(map[string]ToolConfig),
+			}, nil
 		}
 		return nil, err
 	}

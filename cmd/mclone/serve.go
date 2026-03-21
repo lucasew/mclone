@@ -8,17 +8,20 @@ import (
 
 	"github.com/lucasew/mclone/pkg/config"
 	"github.com/lucasew/mclone/pkg/monitor"
-	"github.com/lucasew/mclone/pkg/server"
 	"github.com/lucasew/mclone/pkg/remote"
+	"github.com/lucasew/mclone/pkg/server"
 	"github.com/spf13/cobra"
 )
 
 var serveCmd = &cobra.Command{
 	Use:   "serve [remote]",
 	Short: "Serve a remote via OpenAI or Anthropic compatible API",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		remoteName := strings.TrimSuffix(args[0], ":")
+		remoteName := ""
+		if len(args) > 0 {
+			remoteName = strings.TrimSuffix(args[0], ":")
+		}
 		port, _ := cmd.Flags().GetInt("port")
 		overrideModel, _ := cmd.Flags().GetString("model")
 		verbose, _ := cmd.Flags().GetBool("verbose")
@@ -45,10 +48,19 @@ var serveCmd = &cobra.Command{
 		}
 
 		resolve := remote.NewResolver(loader)
-		provider, err := resolve.Provider(remoteName)
-		if err != nil {
-			monitor.ReportError(cmd.Context(), err, "action", "create_provider")
-			return
+		var provider remote.Provider
+		if remoteName == "" {
+			provider, err = resolve.Exported()
+			if err != nil {
+				monitor.ReportError(cmd.Context(), err, "action", "create_exported_provider")
+				return
+			}
+		} else {
+			provider, err = resolve.Provider(remoteName)
+			if err != nil {
+				monitor.ReportError(cmd.Context(), err, "action", "create_provider")
+				return
+			}
 		}
 
 		cfg := server.Config{
@@ -61,7 +73,7 @@ var serveCmd = &cobra.Command{
 			cfg.DefaultChatOptions = server.ParseGenerationDefaults(rc.Options)
 		}
 
-		slog.Info("starting server", "remote", remoteName, "port", port)
+		slog.Info("starting server", "remote", remoteNameOrExported(remoteName), "port", port)
 		srv := server.New(cfg)
 		if err := srv.ListenAndServe(fmt.Sprintf(":%d", port)); err != nil {
 			monitor.ReportError(cmd.Context(), err, "action", "server_listen")
@@ -75,4 +87,11 @@ func init() {
 	serveCmd.Flags().BoolP("verbose", "v", false, "Enable debug logs")
 	serveCmd.Flags().String("save-raw-request", "", "Path to save the raw incoming request body (overwrites)")
 	rootCmd.AddCommand(serveCmd)
+}
+
+func remoteNameOrExported(name string) string {
+	if name == "" {
+		return "exported"
+	}
+	return name
 }
