@@ -88,12 +88,7 @@ func (p *BalanceProvider) Chat(ctx context.Context, req message.Request) (<-chan
 
 	slog.Info("balance_routing", "backend", b.name, "model", req.Model, "affinity", affinityKey[:8])
 
-	ch, err := p.tryBackend(ctx, b, req)
-	if err != nil {
-		// Initial call failed, try failover
-		return p.failoverFrom(ctx, b, req, affinityKey)
-	}
-	return p.wrapChannel(ctx, ch, b, req, affinityKey), nil
+	return p.startBackend(ctx, b, req, affinityKey)
 }
 
 func (p *BalanceProvider) pickBackend(affinityKey string) *backend {
@@ -133,6 +128,16 @@ func (p *BalanceProvider) pickBackend(affinityKey string) *backend {
 
 func (p *BalanceProvider) tryBackend(ctx context.Context, b *backend, req message.Request) (<-chan message.Event, error) {
 	return b.provider.Chat(ctx, req)
+}
+
+func (p *BalanceProvider) startBackend(ctx context.Context, b *backend, req message.Request, affinityKey string) (<-chan message.Event, error) {
+	ch, err := p.tryBackend(ctx, b, req)
+	if err != nil {
+		cooldown := p.handleBackendError(b, err)
+		b.markUnavailable(cooldown)
+		return p.failoverFrom(ctx, b, req, affinityKey)
+	}
+	return p.wrapChannel(ctx, ch, b, req, affinityKey), nil
 }
 
 // wrapChannel forwards responses but detects errors for failover.
@@ -219,7 +224,7 @@ func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, req
 		}
 
 		slog.Info("balance_failover", "backend", b.name, "model", req.Model)
-		ch, err := b.provider.Chat(ctx, req)
+		ch, err := p.startBackend(ctx, b, req, affinityKey)
 		if err != nil {
 			slog.Warn("balance_failover_error", "backend", b.name, "error", err)
 			continue
