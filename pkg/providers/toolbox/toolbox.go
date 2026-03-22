@@ -64,6 +64,7 @@ func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan
 			var assistantParts []message.Part
 			var handledCalls []message.ToolCall
 			var passthroughCalls []message.ToolCall
+			completionReason := message.StopReasonEndTurn
 
 			for event := range ch {
 				switch ev := event.(type) {
@@ -81,6 +82,8 @@ func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan
 					} else {
 						passthroughCalls = append(passthroughCalls, ev.Call)
 					}
+				case message.ResponseCompleted:
+					completionReason = ev.Reason
 				}
 			}
 
@@ -91,7 +94,7 @@ func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan
 						out <- message.ToolCallFinished{Call: tc}
 					}
 				}
-				out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
+				out <- message.ResponseCompleted{Reason: completionReason}
 				return
 			}
 
