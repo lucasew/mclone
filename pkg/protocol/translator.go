@@ -247,10 +247,30 @@ type Tool struct {
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Function    *struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters,omitempty"`
+	} `json:"function,omitempty"`
 }
 
 func (t Tool) ToDefinition() message.ToolDefinition {
+	name := t.Name
+	description := t.Description
 	params := t.Parameters
+
+	if t.Function != nil {
+		if t.Function.Name != "" {
+			name = t.Function.Name
+		}
+		if t.Function.Description != "" {
+			description = t.Function.Description
+		}
+		if len(t.Function.Parameters) > 0 {
+			params = t.Function.Parameters
+		}
+	}
+
 	if len(params) == 0 {
 		params = t.InputSchema
 	}
@@ -260,8 +280,8 @@ func (t Tool) ToDefinition() message.ToolDefinition {
 	}
 	return message.ToolDefinition{
 		Type:        typ,
-		Name:        t.Name,
-		Description: t.Description,
+		Name:        name,
+		Description: description,
 		Parameters:  params,
 	}
 }
