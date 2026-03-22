@@ -103,6 +103,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 		defer stream.Close()
 
 		acc := &sdk.ChatCompletionAccumulator{}
+		var sawToolCall bool
 
 		for stream.Next() {
 			chunk := stream.Current()
@@ -117,6 +118,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 
 			// Check for completed tool calls
 			if tc, ok := acc.JustFinishedToolCall(); ok {
+				sawToolCall = true
 				out <- message.ToolCallFinished{
 					Call: message.ToolCall{
 						ID:        tc.ID,
@@ -132,7 +134,11 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 			return
 		}
 
-		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
+		reason := message.StopReasonEndTurn
+		if sawToolCall {
+			reason = message.StopReasonToolCall
+		}
+		out <- message.ResponseCompleted{Reason: reason}
 	}()
 	return out, nil
 }
