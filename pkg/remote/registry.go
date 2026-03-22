@@ -85,6 +85,35 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 			}
 			merged.backends = append(merged.backends, exportedBackend{name: name, provider: prov})
 		}
+
+		for name, tc := range conf.Tools {
+			if !tc.Export {
+				continue
+			}
+			source, err := resolve.ToolSource(name)
+			if err != nil {
+				return nil, fmt.Errorf("exported tool %q: %w", name, err)
+			}
+			exportedTools, err := source.Tools(context.Background())
+			if err != nil {
+				return nil, fmt.Errorf("exported tool %q: %w", name, err)
+			}
+			if merged.toolMap == nil {
+				merged.toolMap = make(map[string]tools.Tool)
+			}
+			for _, tool := range exportedTools {
+				key := strings.ToLower(tool.Definition.Name)
+				if existing, ok := merged.toolMap[key]; ok {
+					slog.Warn("exported_tool_collision",
+						"tool", tool.Definition.Name,
+						"source", name,
+						"overrides", existing.Definition.Name,
+					)
+				}
+				merged.tools = append(merged.tools, tool)
+				merged.toolMap[key] = tool
+			}
+		}
 		return merged, nil
 	}
 
@@ -214,6 +243,8 @@ type exportedModel struct {
 type exportedProvider struct {
 	backends []exportedBackend
 	models   map[string]exportedModel
+	tools    []tools.Tool
+	toolMap  map[string]tools.Tool
 }
 
 func (p *exportedProvider) Name() string { return "exported" }
@@ -247,6 +278,13 @@ func (p *exportedProvider) List(ctx context.Context) ([]Model, error) {
 }
 
 func (p *exportedProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
+	if len(p.tools) > 0 {
+		return p.chatWithTools(ctx, req)
+	}
+	return p.chatBase(ctx, req)
+}
+
+func (p *exportedProvider) chatBase(ctx context.Context, req message.Request) (<-chan message.Event, error) {
 	if len(p.models) == 0 {
 		if _, err := p.List(ctx); err != nil {
 			return nil, err
@@ -258,6 +296,109 @@ func (p *exportedProvider) Chat(ctx context.Context, req message.Request) (<-cha
 		return nil, fmt.Errorf("model %q not exported", req.Model)
 	}
 	return entry.backend.provider.Chat(ctx, req)
+}
+
+func (p *exportedProvider) chatWithTools(ctx context.Context, req message.Request) (<-chan message.Event, error) {
+	ownNames := make(map[string]bool)
+	for _, t := range p.tools {
+		ownNames[strings.ToLower(t.Definition.Name)] = true
+	}
+	var cleanTools []message.ToolDefinition
+	for _, t := range req.Options.Tools {
+		if !ownNames[strings.ToLower(t.Name)] {
+			cleanTools = append(cleanTools, t)
+		}
+	}
+	for _, t := range p.tools {
+		cleanTools = append(cleanTools, t.Definition)
+	}
+	req.Options.Tools = cleanTools
+
+	out := make(chan message.Event)
+	go func() {
+		defer close(out)
+		currentTurns := make([]message.Turn, len(req.Turns))
+		copy(currentTurns, req.Turns)
+
+		for loop := 0; loop < 20; loop++ {
+			req.Turns = currentTurns
+			ch, err := p.chatBase(ctx, req)
+			if err != nil {
+				out <- message.ResponseError{Err: err}
+				return
+			}
+
+			var assistantParts []message.Part
+			var handledCalls []message.ToolCall
+			var passthroughCalls []message.ToolCall
+
+			for event := range ch {
+				switch ev := event.(type) {
+				case message.ResponseError:
+					out <- ev
+					return
+				case message.TextDelta:
+					out <- ev
+					assistantParts = append(assistantParts, message.TextPart{Text: ev.Text})
+				case message.ReasoningDelta:
+					out <- ev
+				case message.ToolCallFinished:
+					if _, ok := p.toolMap[strings.ToLower(ev.Call.Name)]; ok {
+						handledCalls = append(handledCalls, ev.Call)
+					} else {
+						passthroughCalls = append(passthroughCalls, ev.Call)
+					}
+				}
+			}
+
+			if len(handledCalls) == 0 {
+				for _, tc := range passthroughCalls {
+					out <- message.ToolCallFinished{Call: tc}
+				}
+				out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
+				return
+			}
+
+			for _, tc := range handledCalls {
+				assistantParts = append(assistantParts, message.ToolCallPart{
+					ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments,
+				})
+			}
+			for _, tc := range passthroughCalls {
+				assistantParts = append(assistantParts, message.ToolCallPart{
+					ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments,
+				})
+			}
+			currentTurns = append(currentTurns, message.Turn{
+				Role: message.RoleAssistant, Parts: assistantParts,
+			})
+
+			for _, tc := range handledCalls {
+				tool := p.toolMap[strings.ToLower(tc.Name)]
+				result, err := tool.Execute(ctx, tc.Arguments)
+				if err != nil {
+					result = fmt.Sprintf("Error: %v", err)
+				}
+				currentTurns = append(currentTurns, message.Turn{
+					Role: message.RoleTool,
+					Parts: []message.Part{message.ToolResultPart{
+						ToolCallID: tc.ID,
+						Content:    result,
+					}},
+				})
+			}
+
+			for _, tc := range passthroughCalls {
+				out <- message.ToolCallFinished{Call: tc}
+			}
+
+			slog.Info("exported_toolbox_requery", "loop", loop+1, "handled", len(handledCalls))
+		}
+
+		slog.Warn("exported_toolbox_max_loops", "max", 20)
+		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
+	}()
+	return out, nil
 }
 
 func (p *exportedProvider) sortedModels() []Model {

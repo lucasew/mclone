@@ -33,6 +33,7 @@ type RemoteConfig struct {
 
 type ToolConfig struct {
 	Type    string         `toml:"type"`
+	Export  bool           `toml:"export"`
 	Options map[string]any `toml:"options"`
 }
 
