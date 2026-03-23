@@ -6,6 +6,7 @@ import (
 	json "github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
@@ -103,6 +104,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 		defer stream.Close()
 
 		acc := &sdk.ChatCompletionAccumulator{}
+		var sawContent bool
 		var sawToolCall bool
 
 		for stream.Next() {
@@ -112,6 +114,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 			// Stream text content
 			for _, choice := range chunk.Choices {
 				if choice.Delta.Content != "" {
+					sawContent = true
 					out <- message.TextDelta{Text: choice.Delta.Content}
 				}
 			}
@@ -129,6 +132,14 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 			}
 		}
 		if err := stream.Err(); err != nil {
+			if shouldIgnoreStreamError(err, sawContent, sawToolCall) {
+				reason := message.StopReasonEndTurn
+				if sawToolCall {
+					reason = message.StopReasonToolCall
+				}
+				out <- message.ResponseCompleted{Reason: reason}
+				return
+			}
 			monitor.ReportError(ctx, err, "action", "openai_stream_error")
 			out <- message.ResponseError{Err: err}
 			return
@@ -141,6 +152,14 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 		out <- message.ResponseCompleted{Reason: reason}
 	}()
 	return out, nil
+}
+
+func shouldIgnoreStreamError(err error, sawContent, sawToolCall bool) bool {
+	if err == nil || (!sawContent && !sawToolCall) {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "NO_ERROR; received from peer") || strings.Contains(msg, "context canceled")
 }
 
 func toSDKMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnion {
