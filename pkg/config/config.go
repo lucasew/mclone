@@ -26,9 +26,10 @@ func LoaderFrom(ctx context.Context) *ConfigLoader {
 }
 
 type RemoteConfig struct {
-	Type    string         `toml:"type"`
-	Export  bool           `toml:"export"`
-	Options map[string]any `toml:"options"`
+	Type          string         `toml:"type"`
+	Export        bool           `toml:"export"`
+	MaxConcurrent int            `toml:"max_concurrent"`
+	Options       map[string]any `toml:"options"`
 }
 
 type ToolConfig struct {

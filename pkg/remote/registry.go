@@ -60,6 +60,9 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 		if err != nil {
 			return nil, err
 		}
+		if rc, ok := conf.Remotes[remoteName]; ok {
+			p = wrapProvider(rc, p)
+		}
 		providerCache[remoteName] = p
 		return p, nil
 	}
@@ -228,6 +231,55 @@ func NewProvider(typeName string, name string, options map[string]any) (Provider
 		return nil, fmt.Errorf("unknown provider type: %s", typeName)
 	}
 	return factory(name, options, Resolver{})
+}
+
+func wrapProvider(rc config.RemoteConfig, p Provider) Provider {
+	if rc.MaxConcurrent > 0 {
+		return newConcurrencyProvider(p, rc.MaxConcurrent)
+	}
+	return p
+}
+
+type concurrencyProvider struct {
+	inner Provider
+	sem   chan struct{}
+}
+
+func newConcurrencyProvider(inner Provider, maxConcurrent int) Provider {
+	return &concurrencyProvider{
+		inner: inner,
+		sem:   make(chan struct{}, maxConcurrent),
+	}
+}
+
+func (p *concurrencyProvider) Name() string { return p.inner.Name() }
+
+func (p *concurrencyProvider) List(ctx context.Context) ([]Model, error) {
+	return p.inner.List(ctx)
+}
+
+func (p *concurrencyProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
+	select {
+	case p.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	ch, err := p.inner.Chat(ctx, req)
+	if err != nil {
+		<-p.sem
+		return nil, err
+	}
+
+	out := make(chan message.Event)
+	go func() {
+		defer close(out)
+		defer func() { <-p.sem }()
+		for ev := range ch {
+			out <- ev
+		}
+	}()
+	return out, nil
 }
 
 type exportedBackend struct {
