@@ -228,7 +228,7 @@ func (m Model) startNext() (tea.Model, tea.Cmd) {
 	m.upsertLine(Line{
 		ID:     pendingAssistantID,
 		Role:   RoleAssistant,
-		Text:   "thinking...",
+		Text:   "",
 		Status: "running",
 	})
 	m.syncViewport()
@@ -286,11 +286,9 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 	bubbleMaxWidth := max((containerWidth*4)/5, 16)
 	userBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		Padding(0, 1).
 		MaxWidth(bubbleMaxWidth)
 	assistantBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		Padding(0, 1).
 		MaxWidth(bubbleMaxWidth)
 	toolLineStyle := lipgloss.NewStyle().
 		Faint(true).
@@ -333,7 +331,7 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 		if line.Status == "running" {
 			text := strings.TrimSpace(line.Text)
 			if text == "" {
-				text = "thinking... " + spinnerFrame
+				text = spinnerFrame
 			} else {
 				text += " " + spinnerFrame
 			}
@@ -423,13 +421,16 @@ func renderMarkdownText(text string, width int) string {
 	if err != nil {
 		return strings.Join(wrapText(text, width), "\n")
 	}
-	return strings.TrimRight(out, "\n")
+	return strings.Trim(out, "\n")
 }
 
 func (m *Model) upsertLine(line Line) {
 	if line.ID == "" {
 		m.transcript = append(m.transcript, line)
 		return
+	}
+	if line.Role == RoleAssistant && line.ID != pendingAssistantID && m.hasLineID(pendingAssistantID) {
+		line.ID = pendingAssistantID
 	}
 	if line.Text == "" && line.Detail == "" && line.Status == "" {
 		m.removeLineByID(line.ID)
@@ -456,6 +457,15 @@ func (m *Model) removeLineByID(id string) {
 		filtered = append(filtered, line)
 	}
 	m.transcript = filtered
+}
+
+func (m *Model) hasLineID(id string) bool {
+	for _, line := range m.transcript {
+		if line.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) moveLineToEnd(id string) {
