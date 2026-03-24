@@ -263,26 +263,55 @@ func (m Model) effectiveWidth() int {
 }
 
 func renderTranscript(transcript []Line, width int) []string {
-	rendered := make([]string, 0, len(transcript)*2)
+	userLabelStyle := lipgloss.NewStyle().
+		Bold(true).
+		Underline(true).
+		Padding(0, 1)
+	assistantLabelStyle := lipgloss.NewStyle().
+		Bold(true).
+		Reverse(true).
+		Padding(0, 1)
+	toolLabelStyle := lipgloss.NewStyle().
+		Bold(true).
+		Italic(true).
+		Padding(0, 1)
+	userBubbleStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		MaxWidth(max(width-8, 16))
+	assistantBubbleStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		MaxWidth(max(width-8, 16))
+	toolBubbleStyle := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		Padding(0, 1).
+		MaxWidth(max(width-8, 16))
+
+	rendered := make([]string, 0, len(transcript)*4)
 	for _, line := range transcript {
 		label := "Agent"
+		labelStyle := assistantLabelStyle
+		bubbleStyle := assistantBubbleStyle
+		alignRight := false
 		switch line.Role {
 		case RoleUser:
 			label = "You"
+			labelStyle = userLabelStyle
+			bubbleStyle = userBubbleStyle
+			alignRight = true
 		case RoleTool:
 			label = "Tool"
+			labelStyle = toolLabelStyle
+			bubbleStyle = toolBubbleStyle
 		}
-		prefix := label + " "
-		wrapped := wrapText(line.Text, max(width-len(label)-2, 10))
-		if len(wrapped) == 0 {
-			rendered = append(rendered, prefix)
-			rendered = append(rendered, "")
-			continue
+
+		bubble := bubbleStyle.Render(strings.TrimSpace(line.Text))
+		block := labelStyle.Render(label) + "\n" + bubble
+		if alignRight {
+			block = lipgloss.NewStyle().Width(width).Align(lipgloss.Right).Render(block)
 		}
-		rendered = append(rendered, prefix+wrapped[0])
-		for _, cont := range wrapped[1:] {
-			rendered = append(rendered, strings.Repeat(" ", len(prefix))+cont)
-		}
+		rendered = append(rendered, strings.Split(block, "\n")...)
 		rendered = append(rendered, "")
 	}
 	return rendered
