@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +13,9 @@ import (
 	"net/url"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
+	"github.com/lucasew/mclone/pkg/chatui"
 	"github.com/tmc/langchaingo/llms"
 	anthropicllm "github.com/tmc/langchaingo/llms/anthropic"
 	openaillm "github.com/tmc/langchaingo/llms/openai"
@@ -145,24 +146,17 @@ func runNativeChat(cmd *cobra.Command, target string) error {
 		return err
 	}
 
-	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Printf("LangChain chat with %s via %s. Type 'exit' to quit.\n", modelName, backend)
-	for {
-		fmt.Print("> ")
-		if !scanner.Scan() {
-			return scanner.Err()
-		}
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
-			continue
-		}
-		if input == "exit" || input == "quit" {
-			return nil
-		}
-		if err := runner.run(cmd.Context(), input, maxIterations); err != nil {
-			fmt.Printf("Error: %v\n", err)
-		}
-	}
+	program := tea.NewProgram(chatui.New(
+		cmd.Context(),
+		modelName,
+		backend,
+		maxIterations,
+		func(ctx context.Context, prompt string, maxIterations int) ([]chatui.Line, error) {
+			return runner.run(ctx, prompt, maxIterations)
+		},
+	))
+	_, err = program.Run()
+	return err
 }
 
 func buildLangchainBaseURL(cmd *cobra.Command, backend string) string {
@@ -246,7 +240,7 @@ func newLangchainRunner(backend, baseURL, modelName, token string) (*langchainRu
 	}, nil
 }
 
-func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterations int) error {
+func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterations int) ([]chatui.Line, error) {
 	messages := []llms.MessageContent{
 		{
 			Role: llms.ChatMessageTypeSystem,
@@ -259,6 +253,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 			Parts: []llms.ContentPart{llms.TextPart(prompt)},
 		},
 	}
+	lines := make([]chatui.Line, 0, maxIterations+1)
 
 	for i := 0; i < maxIterations; i++ {
 		logLangchainMessages(messages)
@@ -269,24 +264,24 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 			llms.WithMaxTokens(1024),
 		)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if len(resp.Choices) == 0 {
-			return errors.New("no choices returned")
+			return nil, errors.New("no choices returned")
 		}
 
 		choice := resp.Choices[0]
 		logLangchainChoice(choice)
 		if len(choice.ToolCalls) == 0 {
 			if choice.Content != "" {
-				fmt.Printf("\n%s", choice.Content)
-				fmt.Println()
+				lines = append(lines, chatui.Line{Role: chatui.RoleAssistant, Text: choice.Content})
 			}
-			return nil
+			return lines, nil
 		}
 
 		assistantParts := make([]llms.ContentPart, 0, len(choice.ToolCalls)+1)
 		if choice.Content != "" {
+			lines = append(lines, chatui.Line{Role: chatui.RoleAssistant, Text: choice.Content})
 			assistantParts = append(assistantParts, llms.TextPart(choice.Content))
 		}
 		for _, call := range choice.ToolCalls {
@@ -300,11 +295,11 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 		for _, call := range choice.ToolCalls {
 			logLangchainToolCall(call)
 			if call.FunctionCall != nil {
-				fmt.Printf("\n[%s]\n", call.FunctionCall.Name)
+				lines = append(lines, chatui.Line{Role: chatui.RoleTool, Text: call.FunctionCall.Name})
 			}
 			result, err := runner.runToolCall(ctx, call)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			logLangchainToolResult(call, result)
 			messages = append(messages, llms.MessageContent{
@@ -320,7 +315,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 		}
 	}
 
-	return fmt.Errorf("max iterations reached without final answer")
+	return nil, fmt.Errorf("max iterations reached without final answer")
 }
 
 func (runner *langchainRunner) runToolCall(ctx context.Context, call llms.ToolCall) (string, error) {
