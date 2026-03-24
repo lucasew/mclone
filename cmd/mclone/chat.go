@@ -277,7 +277,9 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 				}
 				streamedMu.Lock()
 				streamed.WriteString(text)
-				current := streamed.String()
+				current := sanitizeAssistantContent(streamed.String())
+				streamed.Reset()
+				streamed.WriteString(current)
 				streamedMu.Unlock()
 				emit(chatui.Line{
 					ID:     assistantID,
@@ -302,6 +304,9 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 		streamedMu.Unlock()
 		if finalContent == "" {
 			finalContent = choice.Content
+		}
+		if len(choice.ToolCalls) > 0 {
+			finalContent = sanitizeAssistantContent(finalContent)
 		}
 		if len(choice.ToolCalls) == 0 {
 			if finalContent != "" {
@@ -418,6 +423,20 @@ func toolCallStatus(result string) string {
 	default:
 		return "ok"
 	}
+}
+
+func sanitizeAssistantContent(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if i := strings.Index(text, `[{"id":"call_`); i >= 0 {
+		return strings.TrimSpace(text[:i])
+	}
+	if i := strings.Index(text, `[{\"id\":\"call_`); i >= 0 {
+		return strings.TrimSpace(text[:i])
+	}
+	return text
 }
 
 func logLangchainMessages(messages []llms.MessageContent) {
