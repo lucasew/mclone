@@ -3,7 +3,6 @@ package chatui
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -11,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
+	"charm.land/glamour/v2"
 	lipgloss "charm.land/lipgloss/v2"
 )
 
@@ -284,10 +284,6 @@ func (m Model) effectiveWidth() int {
 func renderTranscript(transcript []Line, width int, spinnerFrame string) []string {
 	containerWidth := min(width, 96)
 	bubbleMaxWidth := max((containerWidth*4)/5, 16)
-	userLineStyle := lipgloss.NewStyle().
-		Bold(true)
-	assistantLineStyle := lipgloss.NewStyle().
-		Faint(true)
 	userBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
@@ -302,12 +298,10 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 
 	rendered := make([]string, 0, len(transcript)*4)
 	for _, line := range transcript {
-		lineStyle := assistantLineStyle
 		bubbleStyle := assistantBubbleStyle
 		align := lipgloss.Left
 		switch line.Role {
 		case RoleUser:
-			lineStyle = userLineStyle
 			bubbleStyle = userBubbleStyle
 			align = lipgloss.Right
 		case RoleTool:
@@ -337,24 +331,20 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 		}
 
 		if line.Status == "running" {
-			text := strings.TrimSpace(renderMarkdownText(line.Text))
+			text := strings.TrimSpace(line.Text)
 			if text == "" {
 				text = "thinking... " + spinnerFrame
 			} else {
 				text += " " + spinnerFrame
 			}
-			bubble := bubbleStyle.Width(bubbleMaxWidth).Render(lineStyle.Render(strings.Join(wrapText(text, max(bubbleMaxWidth-4, 12)), "\n")))
+			bubble := bubbleStyle.Width(bubbleMaxWidth).Render(renderMarkdownText(text, max(bubbleMaxWidth-4, 12)))
 			row := lipgloss.NewStyle().Width(containerWidth).Align(align).Render(bubble)
 			rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, lipgloss.Center, row), "\n")...)
 			rendered = append(rendered, "")
 			continue
 		}
 
-		wrapped := wrapText(renderMarkdownText(strings.TrimSpace(line.Text)), max(bubbleMaxWidth-4, 12))
-		if len(wrapped) == 0 {
-			wrapped = []string{""}
-		}
-		bubble := bubbleStyle.Width(bubbleMaxWidth).Render(lineStyle.Render(strings.Join(wrapped, "\n")))
+		bubble := bubbleStyle.Width(bubbleMaxWidth).Render(renderMarkdownText(strings.TrimSpace(line.Text), max(bubbleMaxWidth-4, 12)))
 		row := lipgloss.NewStyle().Width(containerWidth).Align(align).Render(bubble)
 		rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, lipgloss.Center, row), "\n")...)
 		rendered = append(rendered, "")
@@ -418,50 +408,22 @@ func min(a, b int) int {
 	return b
 }
 
-var (
-	reBold   = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-	reItalic = regexp.MustCompile(`\*([^*]+)\*`)
-	reCode   = regexp.MustCompile("`([^`]+)`")
-)
-
-func renderMarkdownText(text string) string {
+func renderMarkdownText(text string, width int) string {
 	if text == "" {
-		return text
+		return ""
 	}
-	lines := strings.Split(text, "\n")
-	out := make([]string, 0, len(lines))
-	inCode := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(trimmed, "```"):
-			inCode = !inCode
-			if inCode {
-				out = append(out, "code:")
-			}
-			continue
-		case inCode:
-			out = append(out, "    "+line)
-			continue
-		case strings.HasPrefix(trimmed, "#"):
-			title := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
-			out = append(out, strings.ToUpper(cleanMarkdownInline(title)))
-		case strings.HasPrefix(trimmed, "- "), strings.HasPrefix(trimmed, "* "):
-			out = append(out, "• "+cleanMarkdownInline(strings.TrimSpace(trimmed[2:])))
-		case strings.HasPrefix(trimmed, "> "):
-			out = append(out, "│ "+cleanMarkdownInline(strings.TrimSpace(trimmed[2:])))
-		default:
-			out = append(out, cleanMarkdownInline(line))
-		}
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithEnvironmentConfig(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return strings.Join(wrapText(text, width), "\n")
 	}
-	return strings.Join(out, "\n")
-}
-
-func cleanMarkdownInline(text string) string {
-	text = reBold.ReplaceAllString(text, "$1")
-	text = reItalic.ReplaceAllString(text, "$1")
-	text = reCode.ReplaceAllString(text, "“$1”")
-	return text
+	out, err := renderer.Render(text)
+	if err != nil {
+		return strings.Join(wrapText(text, width), "\n")
+	}
+	return strings.TrimRight(out, "\n")
 }
 
 func (m *Model) upsertLine(line Line) {
