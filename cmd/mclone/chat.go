@@ -8,12 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
-	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -133,8 +132,6 @@ type loggingRoundTripper struct {
 	base http.RoundTripper
 }
 
-var chatRunSeq atomic.Uint64
-
 func runNativeChat(cmd *cobra.Command, target string) error {
 	modelName := strings.TrimSpace(target)
 	if modelName == "" {
@@ -251,7 +248,6 @@ func newLangchainRunner(backend, baseURL, modelName, token string) (*langchainRu
 }
 
 func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterations int, emit func(chatui.Line)) error {
-	runID := chatRunSeq.Add(1)
 	messages := []llms.MessageContent{
 		{
 			Role: llms.ChatMessageTypeSystem,
@@ -266,7 +262,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 	}
 	for i := 0; i < maxIterations; i++ {
 		logLangchainMessages(messages)
-		assistantID := fmt.Sprintf("assistant:%d:%d", runID, i)
+		assistantID := chatui.PendingAssistantID
 		var streamed strings.Builder
 		var streamedMu sync.Mutex
 		resp, err := runner.model.GenerateContent(

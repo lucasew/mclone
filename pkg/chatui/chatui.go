@@ -30,7 +30,7 @@ type Line struct {
 	Status string
 }
 
-const pendingAssistantID = "__assistant_pending__"
+const PendingAssistantID = "__assistant_pending__"
 
 type ExchangeFunc func(ctx context.Context, prompt string, maxIterations int, emit func(Line)) error
 
@@ -48,6 +48,7 @@ type Model struct {
 	modelName     string
 	backend       string
 	maxIterations int
+	finalSeq      int
 
 	transcript []Line
 	queue      []string
@@ -144,7 +145,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err.Error()
 		}
-		m.removeLineByID(pendingAssistantID)
+		m.removePendingPlaceholder()
 		m.syncViewport()
 		if len(m.queue) > 0 {
 			return m.startNext()
@@ -155,9 +156,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LineMsg:
 		follow := m.viewport.AtBottom()
 		m.upsertLine(msg.Line)
-		if msg.Line.ID != pendingAssistantID {
-			m.moveLineToEnd(pendingAssistantID)
-		}
 		m.syncViewportWithFollow(follow)
 		return m, nil
 	}
@@ -226,7 +224,7 @@ func (m Model) startNext() (tea.Model, tea.Cmd) {
 	m.busy = true
 	m.activePrompt = next
 	m.upsertLine(Line{
-		ID:     pendingAssistantID,
+		ID:     PendingAssistantID,
 		Role:   RoleAssistant,
 		Text:   "",
 		Status: "running",
@@ -429,9 +427,6 @@ func (m *Model) upsertLine(line Line) {
 		m.transcript = append(m.transcript, line)
 		return
 	}
-	if line.Role == RoleAssistant && line.ID != pendingAssistantID && m.hasLineID(pendingAssistantID) {
-		line.ID = pendingAssistantID
-	}
 	if line.Text == "" && line.Detail == "" && line.Status == "" {
 		m.removeLineByID(line.ID)
 		return
@@ -459,6 +454,22 @@ func (m *Model) removeLineByID(id string) {
 	m.transcript = filtered
 }
 
+func (m *Model) removePendingPlaceholder() {
+	for i, line := range m.transcript {
+		if line.ID != PendingAssistantID {
+			continue
+		}
+		if strings.TrimSpace(line.Text) == "" && line.Status == "running" {
+			m.transcript = append(m.transcript[:i], m.transcript[i+1:]...)
+			return
+		}
+		m.transcript[i].Status = ""
+		m.finalSeq++
+		m.transcript[i].ID = fmt.Sprintf("assistant-final:%d", m.finalSeq)
+		return
+	}
+}
+
 func (m *Model) hasLineID(id string) bool {
 	for _, line := range m.transcript {
 		if line.ID == id {
@@ -466,25 +477,6 @@ func (m *Model) hasLineID(id string) bool {
 		}
 	}
 	return false
-}
-
-func (m *Model) moveLineToEnd(id string) {
-	if id == "" || len(m.transcript) < 2 {
-		return
-	}
-	index := -1
-	for i := range m.transcript {
-		if m.transcript[i].ID == id {
-			index = i
-			break
-		}
-	}
-	if index == -1 || index == len(m.transcript)-1 {
-		return
-	}
-	line := m.transcript[index]
-	copy(m.transcript[index:], m.transcript[index+1:])
-	m.transcript[len(m.transcript)-1] = line
 }
 
 func toolStatusIcon(status string) string {
