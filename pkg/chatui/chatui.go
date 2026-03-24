@@ -326,7 +326,12 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 		}
 
 		if line.Status == "running" {
-			text := spinnerFrame + " " + renderMarkdownText(strings.TrimSpace(line.Text))
+			text := strings.TrimSpace(renderMarkdownText(line.Text))
+			if text == "" {
+				text = "thinking... " + spinnerFrame
+			} else {
+				text += " " + spinnerFrame
+			}
 			bubble := bubbleStyle.Render(lineStyle.Render(strings.Join(wrapText(text, max(width-12, 12)), "\n")))
 			rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, align, bubble), "\n")...)
 			rendered = append(rendered, "")
@@ -442,6 +447,10 @@ func cleanMarkdownInline(text string) string {
 func (m *Model) upsertLine(line Line) {
 	if line.ID == "" {
 		m.transcript = append(m.transcript, line)
+		return
+	}
+	if line.Text == "" && line.Detail == "" && line.Status == "" {
+		m.removeLineByID(line.ID)
 		return
 	}
 	for i := range m.transcript {

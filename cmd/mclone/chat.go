@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -131,6 +133,8 @@ type loggingRoundTripper struct {
 	base http.RoundTripper
 }
 
+var chatRunSeq atomic.Uint64
+
 func runNativeChat(cmd *cobra.Command, target string) error {
 	modelName := strings.TrimSpace(target)
 	if modelName == "" {
@@ -247,6 +251,7 @@ func newLangchainRunner(backend, baseURL, modelName, token string) (*langchainRu
 }
 
 func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterations int, emit func(chatui.Line)) error {
+	runID := chatRunSeq.Add(1)
 	messages := []llms.MessageContent{
 		{
 			Role: llms.ChatMessageTypeSystem,
@@ -261,11 +266,31 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 	}
 	for i := 0; i < maxIterations; i++ {
 		logLangchainMessages(messages)
+		assistantID := fmt.Sprintf("assistant:%d:%d", runID, i)
+		var streamed strings.Builder
+		var streamedMu sync.Mutex
 		resp, err := runner.model.GenerateContent(
 			ctx,
 			messages,
 			llms.WithTools(runner.defs),
 			llms.WithMaxTokens(1024),
+			llms.WithStreamingFunc(func(_ context.Context, chunk []byte) error {
+				text := string(chunk)
+				if text == "" {
+					return nil
+				}
+				streamedMu.Lock()
+				streamed.WriteString(text)
+				current := streamed.String()
+				streamedMu.Unlock()
+				emit(chatui.Line{
+					ID:     assistantID,
+					Role:   chatui.RoleAssistant,
+					Text:   current,
+					Status: "running",
+				})
+				return nil
+			}),
 		)
 		if err != nil {
 			return err
@@ -276,17 +301,34 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 
 		choice := resp.Choices[0]
 		logLangchainChoice(choice)
+		streamedMu.Lock()
+		finalContent := streamed.String()
+		streamedMu.Unlock()
+		if finalContent == "" {
+			finalContent = choice.Content
+		}
 		if len(choice.ToolCalls) == 0 {
-			if choice.Content != "" {
-				emit(chatui.Line{Role: chatui.RoleAssistant, Text: choice.Content})
+			if finalContent != "" {
+				emit(chatui.Line{
+					ID:   assistantID,
+					Role: chatui.RoleAssistant,
+					Text: finalContent,
+				})
 			}
 			return nil
 		}
+		if finalContent == "" {
+			emit(chatui.Line{ID: assistantID})
+		}
 
 		assistantParts := make([]llms.ContentPart, 0, len(choice.ToolCalls)+1)
-		if choice.Content != "" {
-			emit(chatui.Line{Role: chatui.RoleAssistant, Text: choice.Content})
-			assistantParts = append(assistantParts, llms.TextPart(choice.Content))
+		if finalContent != "" {
+			emit(chatui.Line{
+				ID:   assistantID,
+				Role: chatui.RoleAssistant,
+				Text: finalContent,
+			})
+			assistantParts = append(assistantParts, llms.TextPart(finalContent))
 		}
 		for _, call := range choice.ToolCalls {
 			assistantParts = append(assistantParts, call)
