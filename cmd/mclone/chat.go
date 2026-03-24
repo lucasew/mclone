@@ -261,53 +261,64 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 	}
 
 	for i := 0; i < maxIterations; i++ {
-			logLangchainMessages(messages)
-			resp, err := runner.model.GenerateContent(ctx, messages, llms.WithTools(runner.defs), llms.WithMaxTokens(1024))
+		logLangchainMessages(messages)
+		resp, err := runner.model.GenerateContent(
+			ctx,
+			messages,
+			llms.WithTools(runner.defs),
+			llms.WithMaxTokens(1024),
+		)
+		if err != nil {
+			return err
+		}
+		if len(resp.Choices) == 0 {
+			return errors.New("no choices returned")
+		}
+
+		choice := resp.Choices[0]
+		logLangchainChoice(choice)
+		if len(choice.ToolCalls) == 0 {
+			if choice.Content != "" {
+				fmt.Printf("\n%s", choice.Content)
+				fmt.Println()
+			}
+			return nil
+		}
+
+		assistantParts := make([]llms.ContentPart, 0, len(choice.ToolCalls)+1)
+		if choice.Content != "" {
+			assistantParts = append(assistantParts, llms.TextPart(choice.Content))
+		}
+		for _, call := range choice.ToolCalls {
+			assistantParts = append(assistantParts, call)
+		}
+		messages = append(messages, llms.MessageContent{
+			Role:  llms.ChatMessageTypeAI,
+			Parts: assistantParts,
+		})
+
+		for _, call := range choice.ToolCalls {
+			logLangchainToolCall(call)
+			if call.FunctionCall != nil {
+				fmt.Printf("\n[%s]\n", call.FunctionCall.Name)
+			}
+			result, err := runner.runToolCall(ctx, call)
 			if err != nil {
 				return err
 			}
-			if len(resp.Choices) == 0 {
-				return errors.New("no choices returned")
-			}
-
-			choice := resp.Choices[0]
-			if len(choice.ToolCalls) == 0 {
-				if choice.Content != "" {
-					fmt.Printf("\n%s\n", choice.Content)
-				}
-				return nil
-			}
-
-			assistantParts := make([]llms.ContentPart, 0, len(choice.ToolCalls))
-			for _, call := range choice.ToolCalls {
-				assistantParts = append(assistantParts, call)
-			}
-			if choice.Content != "" {
-				assistantParts = append([]llms.ContentPart{llms.TextPart(choice.Content)}, assistantParts...)
-			}
+			logLangchainToolResult(call, result)
 			messages = append(messages, llms.MessageContent{
-				Role:  llms.ChatMessageTypeAI,
-				Parts: assistantParts,
-			})
-
-			for _, call := range choice.ToolCalls {
-				result, err := runner.runToolCall(ctx, call)
-				if err != nil {
-					return err
-				}
-				fmt.Printf("\n[%s] %s\n%s\n", call.FunctionCall.Name, call.FunctionCall.Arguments, result)
-				messages = append(messages, llms.MessageContent{
-					Role: llms.ChatMessageTypeTool,
-					Parts: []llms.ContentPart{
-						llms.ToolCallResponse{
-							ToolCallID: call.ID,
-							Name:       call.FunctionCall.Name,
-							Content:    result,
-						},
+				Role: llms.ChatMessageTypeTool,
+				Parts: []llms.ContentPart{
+					llms.ToolCallResponse{
+						ToolCallID: call.ID,
+						Name:       call.FunctionCall.Name,
+						Content:    result,
 					},
-				})
-			}
+				},
+			})
 		}
+	}
 
 	return fmt.Errorf("max iterations reached without final answer")
 }
@@ -342,7 +353,50 @@ func logLangchainMessages(messages []llms.MessageContent) {
 		slog.Warn("langchain_message_log_failed", "error", err)
 		return
 	}
-	slog.Info("langchain_messages", "payload", string(payload))
+	slog.Debug("langchain_messages", "payload", string(payload))
+}
+
+func logLangchainChoice(choice *llms.ContentChoice) {
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	if choice == nil {
+		return
+	}
+	slog.Debug("assistant_response",
+		"content", choice.Content,
+		"tool_calls", len(choice.ToolCalls),
+		"stop_reason", choice.StopReason,
+	)
+}
+
+func logLangchainToolCall(call llms.ToolCall) {
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	if call.FunctionCall == nil {
+		return
+	}
+	slog.Debug("assistant_tool_call",
+		"id", call.ID,
+		"name", call.FunctionCall.Name,
+		"arguments", call.FunctionCall.Arguments,
+	)
+}
+
+func logLangchainToolResult(call llms.ToolCall, result string) {
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	name := ""
+	if call.FunctionCall != nil {
+		name = call.FunctionCall.Name
+	}
+	slog.Debug("tool_result",
+		"id", call.ID,
+		"name", name,
+		"content", result,
+	)
 }
 
 func (transport loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -362,7 +416,7 @@ func (transport loggingRoundTripper) RoundTrip(req *http.Request) (*http.Respons
 		}
 	}
 
-	slog.Info("langchain_http_request",
+	slog.Debug("langchain_http_request",
 		"method", req.Method,
 		"url", req.URL.String(),
 		"body", bodyText,
