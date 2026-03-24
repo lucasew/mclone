@@ -132,10 +132,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinner.TickMsg:
+		follow := m.viewport.AtBottom()
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		if m.busy {
-			m.syncViewport()
+			m.syncViewportWithFollow(follow)
 		}
 		return m, cmd
 
@@ -152,11 +153,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activePrompt = ""
 		return m, nil
 	case LineMsg:
+		follow := m.viewport.AtBottom()
 		m.upsertLine(msg.Line)
 		if msg.Line.ID != pendingAssistantID {
 			m.moveLineToEnd(pendingAssistantID)
 		}
-		m.syncViewport()
+		m.syncViewportWithFollow(follow)
 		return m, nil
 	}
 
@@ -256,6 +258,10 @@ func (m *Model) resizeForLayout(headerHeight, footerHeight int) {
 }
 
 func (m *Model) syncViewport() {
+	m.syncViewportWithFollow(true)
+}
+
+func (m *Model) syncViewportWithFollow(follow bool) {
 	contentWidth := max(m.effectiveWidth()-6, 20)
 	lines := renderTranscript(m.transcript, contentWidth, m.spinner.View())
 	if m.err != "" {
@@ -263,7 +269,9 @@ func (m *Model) syncViewport() {
 		lines = append(lines, wrapText("error: "+m.err, contentWidth)...)
 	}
 	m.viewport.SetContent(strings.Join(lines, "\n"))
-	m.viewport.GotoBottom()
+	if follow {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m Model) effectiveWidth() int {
@@ -274,6 +282,8 @@ func (m Model) effectiveWidth() int {
 }
 
 func renderTranscript(transcript []Line, width int, spinnerFrame string) []string {
+	containerWidth := min(width, 96)
+	bubbleMaxWidth := max((containerWidth*4)/5, 16)
 	userLineStyle := lipgloss.NewStyle().
 		Bold(true)
 	assistantLineStyle := lipgloss.NewStyle().
@@ -281,11 +291,11 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 	userBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
-		MaxWidth(max(width-8, 16))
+		MaxWidth(bubbleMaxWidth)
 	assistantBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
-		MaxWidth(max(width-8, 16))
+		MaxWidth(bubbleMaxWidth)
 	toolLineStyle := lipgloss.NewStyle().
 		Faint(true).
 		Italic(true)
@@ -316,9 +326,10 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 			if line.Detail != "" {
 				toolText += " " + strings.TrimSpace(line.Detail)
 			}
-			for _, part := range wrapText(toolText, max(width-12, 12)) {
+			for _, part := range wrapText(toolText, max(containerWidth-12, 12)) {
 				content := toolLineStyle.Render(part)
-				block := lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Render(content)
+				centered := lipgloss.NewStyle().Width(containerWidth).Align(lipgloss.Center).Render(content)
+				block := lipgloss.PlaceHorizontal(width, lipgloss.Center, centered)
 				rendered = append(rendered, strings.Split(block, "\n")...)
 			}
 			rendered = append(rendered, "")
@@ -332,18 +343,20 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 			} else {
 				text += " " + spinnerFrame
 			}
-			bubble := bubbleStyle.Render(lineStyle.Render(strings.Join(wrapText(text, max(width-12, 12)), "\n")))
-			rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, align, bubble), "\n")...)
+			bubble := bubbleStyle.Width(bubbleMaxWidth).Render(lineStyle.Render(strings.Join(wrapText(text, max(bubbleMaxWidth-4, 12)), "\n")))
+			row := lipgloss.NewStyle().Width(containerWidth).Align(align).Render(bubble)
+			rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, lipgloss.Center, row), "\n")...)
 			rendered = append(rendered, "")
 			continue
 		}
 
-		wrapped := wrapText(renderMarkdownText(strings.TrimSpace(line.Text)), max(width-10, 12))
+		wrapped := wrapText(renderMarkdownText(strings.TrimSpace(line.Text)), max(bubbleMaxWidth-4, 12))
 		if len(wrapped) == 0 {
 			wrapped = []string{""}
 		}
-		bubble := bubbleStyle.Render(lineStyle.Render(strings.Join(wrapped, "\n")))
-		rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, align, bubble), "\n")...)
+		bubble := bubbleStyle.Width(bubbleMaxWidth).Render(lineStyle.Render(strings.Join(wrapped, "\n")))
+		row := lipgloss.NewStyle().Width(containerWidth).Align(align).Render(bubble)
+		rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, lipgloss.Center, row), "\n")...)
 		rendered = append(rendered, "")
 	}
 	return rendered
@@ -393,6 +406,13 @@ func summarizeSingleLine(text string, width int) string {
 
 func max(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b
