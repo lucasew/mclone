@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"net/url"
@@ -123,6 +126,10 @@ type langchainRunner struct {
 	defs  []llms.Tool
 }
 
+type loggingRoundTripper struct {
+	base http.RoundTripper
+}
+
 func runNativeChat(cmd *cobra.Command, target string) error {
 	modelName := strings.TrimSpace(target)
 	if modelName == "" {
@@ -194,6 +201,9 @@ func normalizeBaseURL(rawBaseURL, backend string) string {
 func newLangchainRunner(backend, baseURL, modelName, token string) (*langchainRunner, error) {
 	var model llms.Model
 	var err error
+	httpClient := &http.Client{
+		Transport: loggingRoundTripper{base: http.DefaultTransport},
+	}
 
 	switch backend {
 	case "openai", "openai-legacy":
@@ -201,12 +211,14 @@ func newLangchainRunner(backend, baseURL, modelName, token string) (*langchainRu
 			openaillm.WithBaseURL(baseURL),
 			openaillm.WithModel(modelName),
 			openaillm.WithToken(token),
+			openaillm.WithHTTPClient(httpClient),
 		)
 	case "anthropic":
 		model, err = anthropicllm.New(
 			anthropicllm.WithBaseURL(baseURL),
 			anthropicllm.WithModel(modelName),
 			anthropicllm.WithToken(token),
+			anthropicllm.WithHTTPClient(httpClient),
 		)
 	case "openai-responses":
 		return nil, errors.New("langchaingo does not expose an OpenAI Responses API client in this version")
@@ -249,6 +261,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 	}
 
 	for i := 0; i < maxIterations; i++ {
+			logLangchainMessages(messages)
 			resp, err := runner.model.GenerateContent(ctx, messages, llms.WithTools(runner.defs), llms.WithMaxTokens(1024))
 			if err != nil {
 				return err
@@ -321,6 +334,45 @@ func truncateToolOutput(output string) string {
 		return output
 	}
 	return output[:limit] + "\n\n[truncated]"
+}
+
+func logLangchainMessages(messages []llms.MessageContent) {
+	payload, err := json.MarshalIndent(messages, "", "  ")
+	if err != nil {
+		slog.Warn("langchain_message_log_failed", "error", err)
+		return
+	}
+	slog.Info("langchain_messages", "payload", string(payload))
+}
+
+func (transport loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := transport.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+
+	var bodyText string
+	if req.Body != nil {
+		bodyBytes, err := io.ReadAll(req.Body)
+		if err != nil {
+			slog.Warn("langchain_http_request_read_failed", "error", err)
+		} else {
+			bodyText = string(bodyBytes)
+			req.Body = io.NopCloser(strings.NewReader(bodyText))
+		}
+	}
+
+	slog.Info("langchain_http_request",
+		"method", req.Method,
+		"url", req.URL.String(),
+		"body", bodyText,
+	)
+
+	resp, err := base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func init() {

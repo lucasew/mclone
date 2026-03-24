@@ -66,10 +66,14 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 		option.WithAPIKey(p.APIKey),
 	)
 
+	logOpenAIRequestDebug(req)
+
 	params := sdk.ChatCompletionNewParams{
 		Model:    req.Model,
 		Messages: toSDKMessages(req.Turns),
 	}
+
+	logOpenAIParamsDebug(params)
 
 	if req.Options.Temperature != nil {
 		params.Temperature = sdk.Float(*req.Options.Temperature)
@@ -154,6 +158,30 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	return out, nil
 }
 
+func logOpenAIRequestDebug(req message.Request) {
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	payload, err := json.MarshalIndent(req, "", "  ")
+	if err != nil {
+		slog.Debug("openai_request_debug_marshal_failed", "error", err)
+		return
+	}
+	slog.Debug("openai_request_debug", "payload", string(payload))
+}
+
+func logOpenAIParamsDebug(params sdk.ChatCompletionNewParams) {
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	payload, err := json.MarshalIndent(params, "", "  ")
+	if err != nil {
+		slog.Debug("openai_params_debug_marshal_failed", "error", err)
+		return
+	}
+	slog.Debug("openai_params_debug", "payload", string(payload))
+}
+
 func shouldIgnoreStreamError(err error, sawContent, sawToolCall bool) bool {
 	if err == nil || (!sawContent && !sawToolCall) {
 		return false
@@ -181,7 +209,7 @@ func toSDKMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnio
 				case message.TextPart:
 					textContent += v.Text
 				case message.ToolResultPart:
-					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
+					out = append(out, sdk.ToolMessage(v.Content, v.ToolCallID))
 				}
 			}
 			if textContent != "" {
@@ -220,7 +248,7 @@ func toSDKMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnio
 		case message.RoleTool:
 			for _, p := range m.Parts {
 				if v, ok := p.(message.ToolResultPart); ok {
-					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
+					out = append(out, sdk.ToolMessage(v.Content, v.ToolCallID))
 				}
 			}
 		}
