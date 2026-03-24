@@ -8,6 +8,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	lipgloss "charm.land/lipgloss/v2"
 )
 
@@ -37,33 +39,47 @@ type Model struct {
 	modelName     string
 	backend       string
 	maxIterations int
-	transcript    []Line
-	input         string
-	busy          bool
-	err           string
-	width         int
-	height        int
-	scroll        int
-	queue         []string
-	activePrompt  string
-	spinner       spinner.Model
+
+	transcript []Line
+	queue      []string
+
+	input    textinput.Model
+	viewport viewport.Model
+	spinner  spinner.Model
+
+	activePrompt string
+	busy         bool
+	err          string
+	width        int
+	height       int
 }
 
 var _ tea.Model = Model{}
 
 func New(ctx context.Context, modelName, backend string, maxIterations int, exchange ExchangeFunc) Model {
+	in := textinput.New()
+	in.Prompt = ""
+	in.Placeholder = "type a message"
+	in.Focus()
+
+	vp := viewport.New()
+	vp.SoftWrap = true
+	vp.FillHeight = true
+
 	return Model{
 		ctx:           ctx,
+		exchange:      exchange,
 		modelName:     modelName,
 		backend:       backend,
 		maxIterations: maxIterations,
-		exchange:      exchange,
+		input:         in,
+		viewport:      vp,
 		spinner:       spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.spinner.Tick
+	return tea.Batch(m.input.Focus(), m.spinner.Tick)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -72,25 +88,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			return m, tea.Quit
-		case "up", "k":
-			if m.scroll > 0 {
-				m.scroll--
-			}
-			return m, nil
-		case "down", "j":
-			m.scroll++
-			return m, nil
-		case "pgup":
-			m.scroll -= 5
-			if m.scroll < 0 {
-				m.scroll = 0
-			}
-			return m, nil
-		case "pgdown":
-			m.scroll += 5
-			return m, nil
 		case "enter":
-			input := strings.TrimSpace(m.input)
+			input := strings.TrimSpace(m.input.Value())
 			if input == "" {
 				return m, nil
 			}
@@ -99,211 +98,168 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.transcript = append(m.transcript, Line{Role: RoleUser, Text: input})
 			m.queue = append(m.queue, input)
-			m.input = ""
+			m.input.SetValue("")
 			m.err = ""
-			m.scroll = 1 << 30
+			m.syncViewport()
 			if m.busy {
 				return m, nil
 			}
-			m.busy = true
-			next := m.popQueue()
-			m.activePrompt = next
-			return m, m.runExchange(next)
-		case "backspace", "ctrl+h":
-			m.input = trimLastRune(m.input)
-			return m, nil
-		case "space":
-			m.input += " "
-			return m, nil
+			return m.startNext()
 		}
-		if text := msg.Key().Text; text != "" {
-			m.input += text
-		}
-		return m, nil
+
+		var cmds []tea.Cmd
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		cmds = append(cmds, cmd)
+		m.viewport, cmd = m.viewport.Update(msg)
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.resize()
+		m.syncViewport()
 		return m, nil
+
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+
 	case responseMsg:
 		if msg.err != nil {
 			m.err = msg.err.Error()
-			m.scroll = 1 << 30
 		} else {
 			m.transcript = append(m.transcript, msg.lines...)
-			m.scroll = 1 << 30
 		}
+		m.syncViewport()
 		if len(m.queue) > 0 {
-			next := m.popQueue()
-			m.busy = true
-			m.activePrompt = next
-			return m, m.runExchange(next)
+			return m.startNext()
 		}
 		m.busy = false
 		m.activePrompt = ""
 		return m, nil
 	}
+
 	return m, nil
 }
 
 func (m Model) View() tea.View {
-	width := m.width
-	if width <= 0 {
-		width = 88
-	}
-	outerWidth := max(width-2, 32)
-	contentWidth := max(outerWidth-6, 20)
-
+	width := m.effectiveWidth()
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Reverse(true).
 		Padding(0, 1).
-		Width(outerWidth)
-	metaStyle := lipgloss.NewStyle().
-		Faint(true)
-	userLabelStyle := lipgloss.NewStyle().
-		Bold(true).
-		Underline(true).
-		Padding(0, 1)
-	assistantLabelStyle := lipgloss.NewStyle().
-		Bold(true).
-		Reverse(true).
-		Padding(0, 1)
-	toolLabelStyle := lipgloss.NewStyle().
-		Bold(true).
-		Italic(true).
-		Padding(0, 1)
-	lineBodyStyle := lipgloss.NewStyle()
-	errorStyle := lipgloss.NewStyle().
-		Bold(true).
-		Underline(true)
+		Width(width)
+	metaStyle := lipgloss.NewStyle().Faint(true)
+	assistantLabelStyle := lipgloss.NewStyle().Bold(true).Reverse(true).Padding(0, 1)
+	toolLabelStyle := lipgloss.NewStyle().Bold(true).Italic(true).Padding(0, 1)
 	promptBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
-		Width(outerWidth)
+		Width(width)
 
 	header := fmt.Sprintf(" mclone chat  model=%s  backend=%s ", m.modelName, m.backend)
-	lines := renderTranscript(m.transcript, contentWidth)
 	headerBlock := titleStyle.Render(header) + "\n" + metaStyle.Render("enter send  esc quit")
 
-	promptText := promptBoxStyle.Render(m.input + "█")
-
-	var footerParts []string
-	statusLine := ""
+	var statusLines []string
 	if m.busy {
 		status := m.spinner.View() + " working..."
 		if m.activePrompt != "" {
-			status = m.spinner.View() + " working on: " + summarizeSingleLine(m.activePrompt, max(outerWidth-18, 12))
+			status = m.spinner.View() + " working on: " + summarizeSingleLine(m.activePrompt, max(width-18, 12))
 		}
-		statusLine = lipgloss.JoinHorizontal(
+		statusLines = append(statusLines, lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			assistantLabelStyle.Render("Agent"),
 			" ",
 			metaStyle.Render(status),
-		)
+		))
 	}
 	if len(m.queue) > 0 {
-		next := summarizeSingleLine(m.queue[0], max(outerWidth-16, 12))
-		footerParts = append(footerParts, lipgloss.JoinHorizontal(
+		next := summarizeSingleLine(m.queue[0], max(width-16, 12))
+		statusLines = append(statusLines, lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			toolLabelStyle.Render("Queue"),
 			" ",
 			metaStyle.Render(fmt.Sprintf("%d waiting  next: %s", len(m.queue), next)),
 		))
 	}
-	footerParts = append(footerParts, promptText)
+	if !m.viewport.AtTop() || !m.viewport.AtBottom() {
+		statusLines = append(statusLines, metaStyle.Render("scroll with arrows / pgup / pgdown"))
+	}
+
+	inputBlock := promptBoxStyle.Render(m.input.View())
+	footerParts := append(statusLines, inputBlock)
 	footerBlock := strings.Join(footerParts, "\n")
-	maxScrollHint := 0
-	bodyHeight := m.height - lipgloss.Height(headerBlock) - 1 - lipgloss.Height(footerBlock)
-	if bodyHeight < 4 {
-		bodyHeight = 4
-	}
 
-	if len(lines) > bodyHeight {
-		maxScrollHint = len(lines) - bodyHeight
-	}
-	if m.scroll > maxScrollHint {
-		m.scroll = maxScrollHint
-	}
-	if m.scroll < 0 {
-		m.scroll = 0
-	}
-	start := m.scroll
-	end := start + bodyHeight
-	if end > len(lines) {
-		end = len(lines)
-	}
-	if start > end {
-		start = end
-	}
-	lines = lines[start:end]
-	if len(lines) < bodyHeight {
-		pad := make([]string, bodyHeight-len(lines))
-		lines = append(lines, pad...)
-	}
+	mut := m
+	mut.resizeForLayout(lipgloss.Height(headerBlock), lipgloss.Height(footerBlock))
+	mut.syncViewport()
 
-	var transcript strings.Builder
-	for _, line := range lines {
-		transcript.WriteString(renderStyledLine(line, lineBodyStyle, userLabelStyle, assistantLabelStyle, toolLabelStyle, contentWidth))
-		transcript.WriteString("\n")
-	}
-	if m.err != "" {
-		for _, line := range wrapText("error: "+m.err, max(width-2, 20)) {
-			transcript.WriteString(errorStyle.Render(line))
-			transcript.WriteString("\n")
-		}
-	}
-	if maxScrollHint > 0 {
-		footerParts = append(footerParts[:len(footerParts)-1], append([]string{
-			metaStyle.Render(fmt.Sprintf("scroll %d/%d  up/down move  pgup/pgdown jump", m.scroll, maxScrollHint)),
-		}, footerParts[len(footerParts)-1])...)
-		footerBlock = strings.Join(footerParts, "\n")
-	}
-	if statusLine != "" {
-		footerParts = append(footerParts[:len(footerParts)-1], append([]string{statusLine}, footerParts[len(footerParts)-1])...)
-		footerBlock = strings.Join(footerParts, "\n")
-	}
-
-	bodyBlock := transcript.String()
 	var screen strings.Builder
 	screen.WriteString(headerBlock)
 	screen.WriteString("\n")
-	screen.WriteString(bodyBlock)
+	screen.WriteString(mut.viewport.View())
 	screen.WriteString("\n")
 	screen.WriteString(footerBlock)
+
 	view := tea.NewView(screen.String())
 	view.AltScreen = true
 	return view
 }
 
-func (m Model) runExchange(prompt string) tea.Cmd {
-	return func() tea.Msg {
-		lines, err := m.exchange(m.ctx, prompt, m.maxIterations)
-		return responseMsg{
-			lines: lines,
-			err:   err,
-		}
-	}
-}
-
-func (m *Model) popQueue() string {
+func (m Model) startNext() (tea.Model, tea.Cmd) {
 	if len(m.queue) == 0 {
-		return ""
+		m.busy = false
+		m.activePrompt = ""
+		return m, nil
 	}
 	next := m.queue[0]
 	m.queue = m.queue[1:]
-	return next
+	m.busy = true
+	m.activePrompt = next
+	return m, m.runExchange(next)
 }
 
-func trimLastRune(text string) string {
-	if text == "" {
-		return text
+func (m Model) runExchange(prompt string) tea.Cmd {
+	return func() tea.Msg {
+		lines, err := m.exchange(m.ctx, prompt, m.maxIterations)
+		return responseMsg{lines: lines, err: err}
 	}
-	runes := []rune(text)
-	return string(runes[:len(runes)-1])
+}
+
+func (m *Model) resize() {
+	m.resizeForLayout(3, 3)
+}
+
+func (m *Model) resizeForLayout(headerHeight, footerHeight int) {
+	width := m.effectiveWidth()
+	bodyHeight := m.height - headerHeight - footerHeight - 1
+	if bodyHeight < 4 {
+		bodyHeight = 4
+	}
+	m.input.SetWidth(max(width-4, 10))
+	m.viewport.SetWidth(width)
+	m.viewport.SetHeight(bodyHeight)
+}
+
+func (m *Model) syncViewport() {
+	contentWidth := max(m.effectiveWidth()-6, 20)
+	lines := renderTranscript(m.transcript, contentWidth)
+	if m.err != "" {
+		lines = append(lines, "")
+		lines = append(lines, wrapText("error: "+m.err, contentWidth)...)
+	}
+	m.viewport.SetContent(strings.Join(lines, "\n"))
+	m.viewport.GotoBottom()
+}
+
+func (m Model) effectiveWidth() int {
+	if m.width <= 0 {
+		return 88
+	}
+	return max(m.width-2, 32)
 }
 
 func renderTranscript(transcript []Line, width int) []string {
@@ -313,8 +269,6 @@ func renderTranscript(transcript []Line, width int) []string {
 		switch line.Role {
 		case RoleUser:
 			label = "You"
-		case RoleAssistant:
-			label = "Agent"
 		case RoleTool:
 			label = "Tool"
 		}
@@ -332,32 +286,6 @@ func renderTranscript(transcript []Line, width int) []string {
 		rendered = append(rendered, "")
 	}
 	return rendered
-}
-
-func renderStyledLine(line string, bodyStyle, userLabelStyle, assistantLabelStyle, toolLabelStyle lipgloss.Style, width int) string {
-	labelText := ""
-	content := line
-	if idx := strings.Index(line, " "); idx > 0 {
-		labelText = line[:idx]
-		content = strings.TrimLeft(line[idx+1:], " ")
-	}
-
-	labelStyle := assistantLabelStyle
-	switch labelText {
-	case "You":
-		labelStyle = userLabelStyle
-	case "Tool":
-		labelStyle = toolLabelStyle
-	case "":
-		return bodyStyle.Render(line)
-	}
-
-	return lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		labelStyle.Render(labelText),
-		" ",
-		bodyStyle.Width(max(width-lipgloss.Width(labelText)-3, 10)).Render(content),
-	)
 }
 
 func wrapText(text string, width int) []string {
@@ -390,20 +318,6 @@ func wrapText(text string, width int) []string {
 	return lines
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func summarizeSingleLine(text string, width int) string {
 	text = strings.Join(strings.Fields(text), " ")
 	if width <= 0 || utf8.RuneCountInString(text) <= width {
@@ -414,4 +328,11 @@ func summarizeSingleLine(text string, width int) string {
 		return string(runes[:width])
 	}
 	return string(runes[:width-1]) + "…"
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
