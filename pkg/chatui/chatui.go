@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/bubbles/v2/spinner"
 	lipgloss "charm.land/lipgloss/v2"
 )
 
@@ -45,6 +46,7 @@ type Model struct {
 	scroll        int
 	queue         []string
 	activePrompt  string
+	spinner       spinner.Model
 }
 
 var _ tea.Model = Model{}
@@ -56,10 +58,13 @@ func New(ctx context.Context, modelName, backend string, maxIterations int, exch
 		backend:       backend,
 		maxIterations: maxIterations,
 		exchange:      exchange,
+		spinner:       spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 	}
 }
 
-func (Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	return m.spinner.Tick
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -119,6 +124,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	case responseMsg:
 		if msg.err != nil {
 			m.err = msg.err.Error()
@@ -183,17 +192,18 @@ func (m Model) View() tea.View {
 	promptText := promptBoxStyle.Render(m.input + "█")
 
 	var footerParts []string
+	statusLine := ""
 	if m.busy {
-		status := "working..."
+		status := m.spinner.View() + " working..."
 		if m.activePrompt != "" {
-			status = "working on: " + summarizeSingleLine(m.activePrompt, max(outerWidth-14, 12))
+			status = m.spinner.View() + " working on: " + summarizeSingleLine(m.activePrompt, max(outerWidth-18, 12))
 		}
-		footerParts = append(footerParts, lipgloss.JoinHorizontal(
+		statusLine = lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			assistantLabelStyle.Render("Agent"),
 			" ",
 			metaStyle.Render(status),
-		))
+		)
 	}
 	if len(m.queue) > 0 {
 		next := summarizeSingleLine(m.queue[0], max(outerWidth-16, 12))
@@ -250,6 +260,10 @@ func (m Model) View() tea.View {
 		footerParts = append(footerParts[:len(footerParts)-1], append([]string{
 			metaStyle.Render(fmt.Sprintf("scroll %d/%d  up/down move  pgup/pgdown jump", m.scroll, maxScrollHint)),
 		}, footerParts[len(footerParts)-1])...)
+		footerBlock = strings.Join(footerParts, "\n")
+	}
+	if statusLine != "" {
+		footerParts = append(footerParts[:len(footerParts)-1], append([]string{statusLine}, footerParts[len(footerParts)-1])...)
 		footerBlock = strings.Join(footerParts, "\n")
 	}
 
