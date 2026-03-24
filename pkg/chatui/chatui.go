@@ -3,6 +3,7 @@ package chatui
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -34,7 +35,6 @@ const pendingAssistantID = "__assistant_pending__"
 type ExchangeFunc func(ctx context.Context, prompt string, maxIterations int, emit func(Line)) error
 
 type responseMsg struct {
-	lines []Line
 	err   error
 }
 
@@ -144,9 +144,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err.Error()
 		}
 		m.removeLineByID(pendingAssistantID)
-		for _, line := range msg.lines {
-			m.upsertLine(line)
-		}
 		m.syncViewport()
 		if len(m.queue) > 0 {
 			return m.startNext()
@@ -156,6 +153,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case LineMsg:
 		m.upsertLine(msg.Line)
+		if msg.Line.ID != pendingAssistantID {
+			m.moveLineToEnd(pendingAssistantID)
+		}
 		m.syncViewport()
 		return m, nil
 	}
@@ -200,7 +200,6 @@ func (m Model) View() tea.View {
 
 	mut := m
 	mut.resizeForLayout(lipgloss.Height(headerBlock), lipgloss.Height(footerBlock))
-	mut.syncViewport()
 
 	var screen strings.Builder
 	screen.WriteString(headerBlock)
@@ -236,11 +235,8 @@ func (m Model) startNext() (tea.Model, tea.Cmd) {
 
 func (m Model) runExchange(prompt string) tea.Cmd {
 	return func() tea.Msg {
-		lines := make([]Line, 0, 8)
-		err := m.exchange(m.ctx, prompt, m.maxIterations, func(line Line) {
-			lines = append(lines, line)
-		})
-		return responseMsg{lines: lines, err: err}
+		err := m.exchange(m.ctx, prompt, m.maxIterations, func(Line) {})
+		return responseMsg{err: err}
 	}
 }
 
@@ -281,7 +277,7 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 	userLineStyle := lipgloss.NewStyle().
 		Bold(true)
 	assistantLineStyle := lipgloss.NewStyle().
-		Reverse(true)
+		Faint(true)
 	userBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
@@ -307,12 +303,11 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 		case RoleTool:
 			toolText := strings.TrimSpace(line.Text)
 			prefix := ""
-			suffix := ""
 			if line.Status != "" {
 				if line.Status == "running" {
 					prefix = spinnerFrame
 				} else {
-					suffix = toolStatusIcon(line.Status)
+					prefix = toolStatusIcon(line.Status)
 				}
 			}
 			if prefix != "" {
@@ -320,9 +315,6 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 			}
 			if line.Detail != "" {
 				toolText += " " + strings.TrimSpace(line.Detail)
-			}
-			if suffix != "" {
-				toolText += " " + suffix
 			}
 			for _, part := range wrapText(toolText, max(width-12, 12)) {
 				content := toolLineStyle.Render(part)
@@ -334,14 +326,14 @@ func renderTranscript(transcript []Line, width int, spinnerFrame string) []strin
 		}
 
 		if line.Status == "running" {
-			text := spinnerFrame + " " + strings.TrimSpace(line.Text)
+			text := spinnerFrame + " " + renderMarkdownText(strings.TrimSpace(line.Text))
 			bubble := bubbleStyle.Render(lineStyle.Render(strings.Join(wrapText(text, max(width-12, 12)), "\n")))
 			rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, align, bubble), "\n")...)
 			rendered = append(rendered, "")
 			continue
 		}
 
-		wrapped := wrapText(strings.TrimSpace(line.Text), max(width-10, 12))
+		wrapped := wrapText(renderMarkdownText(strings.TrimSpace(line.Text)), max(width-10, 12))
 		if len(wrapped) == 0 {
 			wrapped = []string{""}
 		}
@@ -401,6 +393,52 @@ func max(a, b int) int {
 	return b
 }
 
+var (
+	reBold   = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	reItalic = regexp.MustCompile(`\*([^*]+)\*`)
+	reCode   = regexp.MustCompile("`([^`]+)`")
+)
+
+func renderMarkdownText(text string) string {
+	if text == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	inCode := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "```"):
+			inCode = !inCode
+			if inCode {
+				out = append(out, "code:")
+			}
+			continue
+		case inCode:
+			out = append(out, "    "+line)
+			continue
+		case strings.HasPrefix(trimmed, "#"):
+			title := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+			out = append(out, strings.ToUpper(cleanMarkdownInline(title)))
+		case strings.HasPrefix(trimmed, "- "), strings.HasPrefix(trimmed, "* "):
+			out = append(out, "• "+cleanMarkdownInline(strings.TrimSpace(trimmed[2:])))
+		case strings.HasPrefix(trimmed, "> "):
+			out = append(out, "│ "+cleanMarkdownInline(strings.TrimSpace(trimmed[2:])))
+		default:
+			out = append(out, cleanMarkdownInline(line))
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func cleanMarkdownInline(text string) string {
+	text = reBold.ReplaceAllString(text, "$1")
+	text = reItalic.ReplaceAllString(text, "$1")
+	text = reCode.ReplaceAllString(text, "“$1”")
+	return text
+}
+
 func (m *Model) upsertLine(line Line) {
 	if line.ID == "" {
 		m.transcript = append(m.transcript, line)
@@ -427,6 +465,25 @@ func (m *Model) removeLineByID(id string) {
 		filtered = append(filtered, line)
 	}
 	m.transcript = filtered
+}
+
+func (m *Model) moveLineToEnd(id string) {
+	if id == "" || len(m.transcript) < 2 {
+		return
+	}
+	index := -1
+	for i := range m.transcript {
+		if m.transcript[i].ID == id {
+			index = i
+			break
+		}
+	}
+	if index == -1 || index == len(m.transcript)-1 {
+		return
+	}
+	line := m.transcript[index]
+	copy(m.transcript[index:], m.transcript[index+1:])
+	m.transcript[len(m.transcript)-1] = line
 }
 
 func toolStatusIcon(status string) string {
