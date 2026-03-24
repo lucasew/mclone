@@ -22,17 +22,24 @@ const (
 )
 
 type Line struct {
-	Role Role
-	Text string
+	ID     string
+	Role   Role
+	Text   string
 	Detail string
 	Status string
 }
 
-type ExchangeFunc func(ctx context.Context, prompt string, maxIterations int) ([]Line, error)
+const pendingAssistantID = "__assistant_pending__"
+
+type ExchangeFunc func(ctx context.Context, prompt string, maxIterations int, emit func(Line)) error
 
 type responseMsg struct {
 	lines []Line
 	err   error
+}
+
+type LineMsg struct {
+	Line Line
 }
 
 type Model struct {
@@ -127,13 +134,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
+		if m.busy {
+			m.syncViewport()
+		}
 		return m, cmd
 
 	case responseMsg:
 		if msg.err != nil {
 			m.err = msg.err.Error()
-		} else {
-			m.transcript = append(m.transcript, msg.lines...)
+		}
+		m.removeLineByID(pendingAssistantID)
+		for _, line := range msg.lines {
+			m.upsertLine(line)
 		}
 		m.syncViewport()
 		if len(m.queue) > 0 {
@@ -141,6 +153,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = false
 		m.activePrompt = ""
+		return m, nil
+	case LineMsg:
+		m.upsertLine(msg.Line)
+		m.syncViewport()
 		return m, nil
 	}
 
@@ -155,7 +171,6 @@ func (m Model) View() tea.View {
 		Padding(0, 1).
 		Width(width)
 	metaStyle := lipgloss.NewStyle().Faint(true)
-	assistantLabelStyle := lipgloss.NewStyle().Bold(true).Reverse(true).Padding(0, 1)
 	toolLabelStyle := lipgloss.NewStyle().Bold(true).Italic(true).Padding(0, 1)
 	promptBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -166,18 +181,6 @@ func (m Model) View() tea.View {
 	headerBlock := titleStyle.Render(header) + "\n" + metaStyle.Render("enter send  esc quit")
 
 	var statusLines []string
-	if m.busy {
-		status := m.spinner.View() + " working..."
-		if m.activePrompt != "" {
-			status = m.spinner.View() + " working on: " + summarizeSingleLine(m.activePrompt, max(width-18, 12))
-		}
-		statusLines = append(statusLines, lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			assistantLabelStyle.Render("Agent"),
-			" ",
-			metaStyle.Render(status),
-		))
-	}
 	if len(m.queue) > 0 {
 		next := summarizeSingleLine(m.queue[0], max(width-16, 12))
 		statusLines = append(statusLines, lipgloss.JoinHorizontal(
@@ -221,12 +224,22 @@ func (m Model) startNext() (tea.Model, tea.Cmd) {
 	m.queue = m.queue[1:]
 	m.busy = true
 	m.activePrompt = next
+	m.upsertLine(Line{
+		ID:     pendingAssistantID,
+		Role:   RoleAssistant,
+		Text:   "thinking...",
+		Status: "running",
+	})
+	m.syncViewport()
 	return m, m.runExchange(next)
 }
 
 func (m Model) runExchange(prompt string) tea.Cmd {
 	return func() tea.Msg {
-		lines, err := m.exchange(m.ctx, prompt, m.maxIterations)
+		lines := make([]Line, 0, 8)
+		err := m.exchange(m.ctx, prompt, m.maxIterations, func(line Line) {
+			lines = append(lines, line)
+		})
 		return responseMsg{lines: lines, err: err}
 	}
 }
@@ -248,7 +261,7 @@ func (m *Model) resizeForLayout(headerHeight, footerHeight int) {
 
 func (m *Model) syncViewport() {
 	contentWidth := max(m.effectiveWidth()-6, 20)
-	lines := renderTranscript(m.transcript, contentWidth)
+	lines := renderTranscript(m.transcript, contentWidth, m.spinner.View())
 	if m.err != "" {
 		lines = append(lines, "")
 		lines = append(lines, wrapText("error: "+m.err, contentWidth)...)
@@ -264,11 +277,19 @@ func (m Model) effectiveWidth() int {
 	return max(m.width-2, 32)
 }
 
-func renderTranscript(transcript []Line, width int) []string {
+func renderTranscript(transcript []Line, width int, spinnerFrame string) []string {
 	userLineStyle := lipgloss.NewStyle().
 		Bold(true)
 	assistantLineStyle := lipgloss.NewStyle().
 		Reverse(true)
+	userBubbleStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		MaxWidth(max(width-8, 16))
+	assistantBubbleStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		MaxWidth(max(width-8, 16))
 	toolLineStyle := lipgloss.NewStyle().
 		Faint(true).
 		Italic(true)
@@ -276,18 +297,32 @@ func renderTranscript(transcript []Line, width int) []string {
 	rendered := make([]string, 0, len(transcript)*4)
 	for _, line := range transcript {
 		lineStyle := assistantLineStyle
+		bubbleStyle := assistantBubbleStyle
 		align := lipgloss.Left
 		switch line.Role {
 		case RoleUser:
 			lineStyle = userLineStyle
+			bubbleStyle = userBubbleStyle
 			align = lipgloss.Right
 		case RoleTool:
 			toolText := strings.TrimSpace(line.Text)
+			prefix := ""
+			suffix := ""
 			if line.Status != "" {
-				toolText = toolStatusIcon(line.Status) + " " + toolText
+				if line.Status == "running" {
+					prefix = spinnerFrame
+				} else {
+					suffix = toolStatusIcon(line.Status)
+				}
+			}
+			if prefix != "" {
+				toolText = prefix + " " + toolText
 			}
 			if line.Detail != "" {
 				toolText += " " + strings.TrimSpace(line.Detail)
+			}
+			if suffix != "" {
+				toolText += " " + suffix
 			}
 			for _, part := range wrapText(toolText, max(width-12, 12)) {
 				content := toolLineStyle.Render(part)
@@ -298,13 +333,20 @@ func renderTranscript(transcript []Line, width int) []string {
 			continue
 		}
 
+		if line.Status == "running" {
+			text := spinnerFrame + " " + strings.TrimSpace(line.Text)
+			bubble := bubbleStyle.Render(lineStyle.Render(strings.Join(wrapText(text, max(width-12, 12)), "\n")))
+			rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, align, bubble), "\n")...)
+			rendered = append(rendered, "")
+			continue
+		}
+
 		wrapped := wrapText(strings.TrimSpace(line.Text), max(width-10, 12))
 		if len(wrapped) == 0 {
 			wrapped = []string{""}
 		}
-		for _, part := range wrapped {
-			rendered = append(rendered, lipgloss.PlaceHorizontal(width, align, lineStyle.Render(part)))
-		}
+		bubble := bubbleStyle.Render(lineStyle.Render(strings.Join(wrapped, "\n")))
+		rendered = append(rendered, strings.Split(lipgloss.PlaceHorizontal(width, align, bubble), "\n")...)
 		rendered = append(rendered, "")
 	}
 	return rendered
@@ -357,6 +399,34 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (m *Model) upsertLine(line Line) {
+	if line.ID == "" {
+		m.transcript = append(m.transcript, line)
+		return
+	}
+	for i := range m.transcript {
+		if m.transcript[i].ID == line.ID {
+			m.transcript[i] = line
+			return
+		}
+	}
+	m.transcript = append(m.transcript, line)
+}
+
+func (m *Model) removeLineByID(id string) {
+	if id == "" {
+		return
+	}
+	filtered := m.transcript[:0]
+	for _, line := range m.transcript {
+		if line.ID == id {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	m.transcript = filtered
 }
 
 func toolStatusIcon(status string) string {
