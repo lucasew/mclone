@@ -317,8 +317,9 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 			}
 			return nil
 		}
-		if finalContent == "" {
+		if choice.Content == "" {
 			emit(chatui.Line{ID: assistantID})
+			finalContent = ""
 		}
 
 		assistantParts := make([]llms.ContentPart, 0, len(choice.ToolCalls)+1)
