@@ -314,7 +314,12 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 			return nil
 		}
 		if choice.Content == "" {
-			emit(chatui.Line{ID: assistantID})
+			emit(chatui.Line{
+				ID:     assistantID,
+				Role:   chatui.RoleAssistant,
+				Text:   "",
+				Status: "running",
+			})
 			finalContent = ""
 		}
 

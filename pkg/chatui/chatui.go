@@ -424,6 +424,10 @@ func renderMarkdownText(text string, width int) string {
 
 func (m *Model) upsertLine(line Line) {
 	if line.ID == "" {
+		if line.Role != RoleAssistant && m.hasLineID(PendingAssistantID) {
+			m.insertBeforePending(line)
+			return
+		}
 		m.transcript = append(m.transcript, line)
 		return
 	}
@@ -436,6 +440,10 @@ func (m *Model) upsertLine(line Line) {
 			m.transcript[i] = line
 			return
 		}
+	}
+	if line.ID != PendingAssistantID && m.hasLineID(PendingAssistantID) {
+		m.insertBeforePending(line)
+		return
 	}
 	m.transcript = append(m.transcript, line)
 }
@@ -477,6 +485,16 @@ func (m *Model) hasLineID(id string) bool {
 		}
 	}
 	return false
+}
+
+func (m *Model) insertBeforePending(line Line) {
+	for i := range m.transcript {
+		if m.transcript[i].ID == PendingAssistantID {
+			m.transcript = append(m.transcript[:i], append([]Line{line}, m.transcript[i:]...)...)
+			return
+		}
+	}
+	m.transcript = append(m.transcript, line)
 }
 
 func toolStatusIcon(status string) string {
