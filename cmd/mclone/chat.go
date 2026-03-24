@@ -294,14 +294,19 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 
 		for _, call := range choice.ToolCalls {
 			logLangchainToolCall(call)
-			if call.FunctionCall != nil {
-				lines = append(lines, chatui.Line{Role: chatui.RoleTool, Text: call.FunctionCall.Name})
-			}
 			result, err := runner.runToolCall(ctx, call)
 			if err != nil {
 				return nil, err
 			}
 			logLangchainToolResult(call, result)
+			if call.FunctionCall != nil {
+				lines = append(lines, chatui.Line{
+					Role:   chatui.RoleTool,
+					Text:   call.FunctionCall.Name,
+					Detail: call.FunctionCall.Arguments,
+					Status: toolCallStatus(result),
+				})
+			}
 			messages = append(messages, llms.MessageContent{
 				Role: llms.ChatMessageTypeTool,
 				Parts: []llms.ContentPart{
@@ -340,6 +345,24 @@ func truncateToolOutput(output string) string {
 		return output
 	}
 	return output[:limit] + "\n\n[truncated]"
+}
+
+func toolCallStatus(result string) string {
+	lower := strings.ToLower(result)
+	switch {
+	case strings.Contains(lower, "command error:"):
+		return "error"
+	case strings.Contains(lower, "read failed:"):
+		return "error"
+	case strings.Contains(lower, "invalid arguments:"):
+		return "error"
+	case strings.Contains(lower, "unknown tool:"):
+		return "error"
+	case strings.Contains(lower, "missing function call payload"):
+		return "error"
+	default:
+		return "ok"
+	}
 }
 
 func logLangchainMessages(messages []llms.MessageContent) {

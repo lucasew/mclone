@@ -24,6 +24,8 @@ const (
 type Line struct {
 	Role Role
 	Text string
+	Detail string
+	Status string
 }
 
 type ExchangeFunc func(ctx context.Context, prompt string, maxIterations int) ([]Line, error)
@@ -263,55 +265,46 @@ func (m Model) effectiveWidth() int {
 }
 
 func renderTranscript(transcript []Line, width int) []string {
-	userLabelStyle := lipgloss.NewStyle().
-		Bold(true).
-		Underline(true).
-		Padding(0, 1)
-	assistantLabelStyle := lipgloss.NewStyle().
-		Bold(true).
-		Reverse(true).
-		Padding(0, 1)
-	toolLabelStyle := lipgloss.NewStyle().
-		Bold(true).
-		Italic(true).
-		Padding(0, 1)
-	userBubbleStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(0, 1).
-		MaxWidth(max(width-8, 16))
-	assistantBubbleStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(0, 1).
-		MaxWidth(max(width-8, 16))
-	toolBubbleStyle := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		Padding(0, 1).
-		MaxWidth(max(width-8, 16))
+	userLineStyle := lipgloss.NewStyle().
+		Bold(true)
+	assistantLineStyle := lipgloss.NewStyle().
+		Reverse(true)
+	toolLineStyle := lipgloss.NewStyle().
+		Faint(true).
+		Italic(true)
 
 	rendered := make([]string, 0, len(transcript)*4)
 	for _, line := range transcript {
-		label := "Agent"
-		labelStyle := assistantLabelStyle
-		bubbleStyle := assistantBubbleStyle
-		alignRight := false
+		lineStyle := assistantLineStyle
+		align := lipgloss.Left
 		switch line.Role {
 		case RoleUser:
-			label = "You"
-			labelStyle = userLabelStyle
-			bubbleStyle = userBubbleStyle
-			alignRight = true
+			lineStyle = userLineStyle
+			align = lipgloss.Right
 		case RoleTool:
-			label = "Tool"
-			labelStyle = toolLabelStyle
-			bubbleStyle = toolBubbleStyle
+			toolText := strings.TrimSpace(line.Text)
+			if line.Status != "" {
+				toolText = toolStatusIcon(line.Status) + " " + toolText
+			}
+			if line.Detail != "" {
+				toolText += " " + strings.TrimSpace(line.Detail)
+			}
+			for _, part := range wrapText(toolText, max(width-12, 12)) {
+				content := toolLineStyle.Render(part)
+				block := lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Render(content)
+				rendered = append(rendered, strings.Split(block, "\n")...)
+			}
+			rendered = append(rendered, "")
+			continue
 		}
 
-		bubble := bubbleStyle.Render(strings.TrimSpace(line.Text))
-		block := labelStyle.Render(label) + "\n" + bubble
-		if alignRight {
-			block = lipgloss.NewStyle().Width(width).Align(lipgloss.Right).Render(block)
+		wrapped := wrapText(strings.TrimSpace(line.Text), max(width-10, 12))
+		if len(wrapped) == 0 {
+			wrapped = []string{""}
 		}
-		rendered = append(rendered, strings.Split(block, "\n")...)
+		for _, part := range wrapped {
+			rendered = append(rendered, lipgloss.PlaceHorizontal(width, align, lineStyle.Render(part)))
+		}
 		rendered = append(rendered, "")
 	}
 	return rendered
@@ -364,4 +357,15 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func toolStatusIcon(status string) string {
+	switch status {
+	case "ok":
+		return "*"
+	case "error":
+		return "!"
+	default:
+		return status
+	}
 }
