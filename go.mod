@@ -14,7 +14,7 @@ require (
 	github.com/mattn/godown v0.0.1
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/openai/openai-go v1.12.0
-	github.com/pelletier/go-toml/v2 v2.2.4
+	github.com/pelletier/go-toml/v2 v2.3.0
 	github.com/spf13/cobra v1.10.2
 	github.com/tmc/langchaingo v0.1.14
 	go.opentelemetry.io/otel v1.36.0
