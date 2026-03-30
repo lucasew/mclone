@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/lucasew/mclone/pkg/config"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/spf13/cobra"
 )
@@ -90,12 +91,18 @@ func interactiveConfig(ctx context.Context) {
 		sort.Strings(names)
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tTYPE")
+		if _, err := fmt.Fprintln(w, "NAME\tTYPE"); err != nil {
+			monitor.ReportError(ctx, err, "action", "mclone_config_fprintln_error")
+		}
 		for _, name := range names {
 			r := conf.Remotes[name]
-			fmt.Fprintf(w, "%s\t%s\n", name, r.Type)
+			if _, err := fmt.Fprintf(w, "%s\t%s\n", name, r.Type); err != nil {
+				monitor.ReportError(ctx, err, "action", "mclone_config_fprintf_error")
+			}
 		}
-		w.Flush()
+		if err := w.Flush(); err != nil {
+			monitor.ReportError(ctx, err, "action", "mclone_config_flush_error")
+		}
 
 		fmt.Println("\ne) Edit existing remote")
 		fmt.Println("n) New remote")
@@ -137,11 +144,17 @@ func interactiveConfig(ctx context.Context) {
 			fmt.Println("Available provider types:")
 
 			typeWriter := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-			fmt.Fprintln(typeWriter, "#\tTYPE")
-			for i, t := range types {
-				fmt.Fprintf(typeWriter, "%d\t%s\n", i+1, t)
+			if _, err := fmt.Fprintln(typeWriter, "#\tTYPE"); err != nil {
+				monitor.ReportError(ctx, err, "action", "mclone_config_fprintln_error")
 			}
-			typeWriter.Flush()
+			for i, t := range types {
+				if _, err := fmt.Fprintf(typeWriter, "%d\t%s\n", i+1, t); err != nil {
+					monitor.ReportError(ctx, err, "action", "mclone_config_fprintf_error")
+				}
+			}
+			if err := typeWriter.Flush(); err != nil {
+				monitor.ReportError(ctx, err, "action", "mclone_config_flush_error")
+			}
 
 			fmt.Print("Select type (number or name): ")
 			typeChoice, _ := reader.ReadString('\n')

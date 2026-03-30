@@ -15,8 +15,8 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/spf13/cobra"
 	"github.com/lucasew/mclone/pkg/chatui"
+	"github.com/spf13/cobra"
 	"github.com/tmc/langchaingo/llms"
 	anthropicllm "github.com/tmc/langchaingo/llms/anthropic"
 	openaillm "github.com/tmc/langchaingo/llms/openai"

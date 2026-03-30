@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/lucasew/mclone/pkg/config"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/spf13/cobra"
 )
@@ -45,11 +46,17 @@ func listModels(resolveProvider func() (remote.Provider, error)) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "SLUG\tNAME")
-	for _, m := range models {
-		fmt.Fprintf(w, "%s\t%s\n", m.Slug, m.Name)
+	if _, err := fmt.Fprintln(w, "SLUG\tNAME"); err != nil {
+		monitor.ReportError(context.Background(), err, "action", "mclone_ls_fprintln_error")
 	}
-	w.Flush()
+	for _, m := range models {
+		if _, err := fmt.Fprintf(w, "%s\t%s\n", m.Slug, m.Name); err != nil {
+			monitor.ReportError(context.Background(), err, "action", "mclone_ls_fprintf_error")
+		}
+	}
+	if err := w.Flush(); err != nil {
+		monitor.ReportError(context.Background(), err, "action", "mclone_ls_flush_error")
+	}
 }
 
 func init() {

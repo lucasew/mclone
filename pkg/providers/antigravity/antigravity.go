@@ -251,7 +251,11 @@ func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan messag
 			out <- message.ResponseError{Err: err}
 			return
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				monitor.ReportError(ctx, err, "action", "antigravity_resp_body_close_error")
+			}
+		}()
 
 		reader := bufio.NewReader(resp.Body)
 		toolCallsBuffer := make(map[int]*message.ToolCall)
@@ -390,7 +394,9 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 			}
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 				respBody, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
+				if err := resp.Body.Close(); err != nil {
+					monitor.ReportError(ctx, err, "action", "antigravity_resp_body_close_error")
+				}
 				retryAfter := parseRetryAfter(resp, respBody)
 				retrySeq := 0
 				if retryAfter > maxReasonableRetryAfter {
@@ -418,13 +424,17 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 			}
 			if resp.StatusCode >= 500 {
 				respBody, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
+				if err := resp.Body.Close(); err != nil {
+					monitor.ReportError(ctx, err, "action", "antigravity_resp_body_close_error")
+				}
 				lastErr = fmt.Errorf("endpoint %s server error %d: %s", endpoint, resp.StatusCode, string(respBody))
 				slog.Warn("antigravity_endpoint_server_error", "endpoint", endpoint, "status", resp.StatusCode)
 				continue
 			}
 			respBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			if err := resp.Body.Close(); err != nil {
+				monitor.ReportError(ctx, err, "action", "antigravity_resp_body_close_error")
+			}
 			if resp.StatusCode == http.StatusForbidden && shouldFailoverEndpoint(endpoint, respBody) {
 				lastErr = fmt.Errorf("endpoint %s forbidden: %s", endpoint, string(respBody))
 				slog.Warn("antigravity_endpoint_forbidden_failover", "endpoint", endpoint, "status", resp.StatusCode)
@@ -1149,7 +1159,7 @@ func sanitizeToolName(name string) string {
 		return "tool"
 	}
 	first := sanitized[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && first != '_' {
 		sanitized = "_" + sanitized
 	}
 	if len(sanitized) > 128 {
@@ -1337,7 +1347,11 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			monitor.ReportError(ctx, err, "action", "antigravity_resp_body_close_error")
+		}
+	}()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("onboard error %d: %s", resp.StatusCode, string(respBody))
@@ -1375,7 +1389,9 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 			continue
 		}
 		bodyOp, _ := io.ReadAll(respOp.Body)
-		respOp.Body.Close()
+		if err := respOp.Body.Close(); err != nil {
+			monitor.ReportError(ctx, err, "action", "antigravity_resp_body_close_error")
+		}
 		if respOp.StatusCode != 200 {
 			continue
 		}
@@ -1427,7 +1443,11 @@ func (p *Provider) refreshToken(refreshToken string) (*TokenData, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			monitor.ReportError(context.Background(), err, "action", "antigravity_resp_body_close_error")
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("refresh failed status %d: %s", resp.StatusCode, string(body))
@@ -1517,7 +1537,11 @@ func (p *Provider) exchangeCode(code, verifier string) (*TokenData, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			monitor.ReportError(context.Background(), err, "action", "antigravity_resp_body_close_error")
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("exchange failed status %d: %s", resp.StatusCode, string(body))
