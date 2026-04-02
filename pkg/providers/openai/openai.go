@@ -41,7 +41,11 @@ func (p *OpenAIProvider) List(ctx context.Context) ([]remote.Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			monitor.ReportError(ctx, closeErr, "action", "openai_list_close_body_error")
+		}
+	}()
 
 	var result struct {
 		Data []struct {
@@ -105,7 +109,11 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	out := make(chan message.Event)
 	go func() {
 		defer close(out)
-		defer stream.Close()
+		defer func() {
+			if closeErr := stream.Close(); closeErr != nil {
+				monitor.ReportError(ctx, closeErr, "action", "openai_chat_stream_close_error")
+			}
+		}()
 
 		acc := &sdk.ChatCompletionAccumulator{}
 		var sawContent bool

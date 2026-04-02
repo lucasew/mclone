@@ -39,7 +39,11 @@ func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			monitor.ReportError(ctx, closeErr, "action", "anthropic_list_close_body_error")
+		}
+	}()
 
 	var result struct {
 		Data []struct {
@@ -101,7 +105,11 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req message.Request) (<-ch
 	out := make(chan message.Event)
 	go func() {
 		defer close(out)
-		defer stream.Close()
+		defer func() {
+			if closeErr := stream.Close(); closeErr != nil {
+				monitor.ReportError(ctx, closeErr, "action", "anthropic_chat_stream_close_error")
+			}
+		}()
 
 		// Track tool calls by index
 		toolCalls := make(map[int64]*message.ToolCall)
@@ -225,8 +233,8 @@ func toSDKMessages(messages []message.Turn) []sdk.MessageParam {
 func toSDKTools(tools []message.ToolDefinition) []sdk.ToolUnionParam {
 	var out []sdk.ToolUnionParam
 	for _, t := range tools {
-		switch {
-		case t.Type == "web_search_20250305":
+		switch t.Type {
+		case "web_search_20250305":
 			// Promote to native Anthropic web search
 			out = append(out, sdk.ToolUnionParam{
 				OfWebSearchTool20250305: &sdk.WebSearchTool20250305Param{},

@@ -1,0 +1,1 @@
+- 2026-04-02: Ensure body closure calls capture and centralize errors via monitor rather than silently skipping them, and use simple boolean algebra for conditions.
