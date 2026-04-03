@@ -73,7 +73,7 @@ func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan
 					return
 				case message.TextDelta:
 					out <- ev
-					assistantParts = append(assistantParts, message.TextPart{Text: ev.Text})
+					assistantParts = append(assistantParts, message.TextPart(ev))
 				case message.ReasoningDelta:
 					out <- ev
 				case message.ToolCallFinished:

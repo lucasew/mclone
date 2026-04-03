@@ -513,7 +513,7 @@ func sanitizeGeminiToolName(name string, index int) string {
 		return fmt.Sprintf("tool_%d", index)
 	}
 	first := sanitized[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && first != '_' {
 		sanitized = "_" + sanitized
 	}
 	if len(sanitized) > 128 {

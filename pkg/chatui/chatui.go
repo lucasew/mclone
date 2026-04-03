@@ -6,10 +6,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 	lipgloss "charm.land/lipgloss/v2"
 )
@@ -35,7 +35,7 @@ const PendingAssistantID = "__assistant_pending__"
 type ExchangeFunc func(ctx context.Context, prompt string, maxIterations int, emit func(Line)) error
 
 type responseMsg struct {
-	err   error
+	err error
 }
 
 type LineMsg struct {

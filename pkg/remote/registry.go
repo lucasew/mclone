@@ -391,7 +391,7 @@ func (p *exportedProvider) chatWithTools(ctx context.Context, req message.Reques
 					return
 				case message.TextDelta:
 					out <- ev
-					assistantParts = append(assistantParts, message.TextPart{Text: ev.Text})
+					assistantParts = append(assistantParts, message.TextPart(ev))
 				case message.ReasoningDelta:
 					out <- ev
 				case message.ToolCallFinished:

@@ -2,10 +2,10 @@ package config
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -20,7 +20,7 @@ func WithLoader(ctx context.Context, loader *ConfigLoader) context.Context {
 func LoaderFrom(ctx context.Context) *ConfigLoader {
 	l, ok := ctx.Value(contextKey{}).(*ConfigLoader)
 	if !ok {
-		panic(fmt.Sprintf("config.LoaderFrom: no ConfigLoader in context"))
+		panic("config.LoaderFrom: no ConfigLoader in context")
 	}
 	return l
 }
@@ -65,7 +65,11 @@ func (c *ConfigLoader) GetLocation() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		defer f.Close()
+		defer func() {
+			if err := f.Close(); err != nil {
+				monitor.ReportError(context.Background(), err, "action", "config_file_close_error")
+			}
+		}()
 	}
 	return c.Location, nil
 }
