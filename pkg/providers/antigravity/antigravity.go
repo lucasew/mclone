@@ -251,7 +251,11 @@ func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan messag
 			out <- message.ResponseError{Err: err}
 			return
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				monitor.ReportError(ctx, err, "action", "antigravity_close_response_body")
+			}
+		}()
 
 		reader := bufio.NewReader(resp.Body)
 		toolCallsBuffer := make(map[int]*message.ToolCall)
@@ -389,8 +393,13 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 				return resp, nil
 			}
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-				respBody, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
+				respBody, err := io.ReadAll(resp.Body)
+				if err != nil {
+					monitor.ReportError(ctx, err, "action", "antigravity_read_rate_limit_body")
+				}
+				if err := resp.Body.Close(); err != nil {
+					monitor.ReportError(ctx, err, "action", "antigravity_close_rate_limit_body")
+				}
 				retryAfter := parseRetryAfter(resp, respBody)
 				retrySeq := 0
 				if retryAfter > maxReasonableRetryAfter {
@@ -417,14 +426,24 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 				goto nextAttempt
 			}
 			if resp.StatusCode >= 500 {
-				respBody, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
+				respBody, err := io.ReadAll(resp.Body)
+				if err != nil {
+					monitor.ReportError(ctx, err, "action", "antigravity_read_500_body")
+				}
+				if err := resp.Body.Close(); err != nil {
+					monitor.ReportError(ctx, err, "action", "antigravity_close_500_body")
+				}
 				lastErr = fmt.Errorf("endpoint %s server error %d: %s", endpoint, resp.StatusCode, string(respBody))
 				slog.Warn("antigravity_endpoint_server_error", "endpoint", endpoint, "status", resp.StatusCode)
 				continue
 			}
-			respBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			respBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				monitor.ReportError(ctx, err, "action", "antigravity_read_error_body")
+			}
+			if err := resp.Body.Close(); err != nil {
+				monitor.ReportError(ctx, err, "action", "antigravity_close_error_body")
+			}
 			if resp.StatusCode == http.StatusForbidden && shouldFailoverEndpoint(endpoint, respBody) {
 				lastErr = fmt.Errorf("endpoint %s forbidden: %s", endpoint, string(respBody))
 				slog.Warn("antigravity_endpoint_forbidden_failover", "endpoint", endpoint, "status", resp.StatusCode)
@@ -1149,7 +1168,7 @@ func sanitizeToolName(name string) string {
 		return "tool"
 	}
 	first := sanitized[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && first != '_' {
 		sanitized = "_" + sanitized
 	}
 	if len(sanitized) > 128 {
@@ -1337,7 +1356,11 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			monitor.ReportError(ctx, err, "action", "antigravity_close_onboard_body")
+		}
+	}()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("onboard error %d: %s", resp.StatusCode, string(respBody))
@@ -1374,8 +1397,13 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 		if err != nil {
 			continue
 		}
-		bodyOp, _ := io.ReadAll(respOp.Body)
-		respOp.Body.Close()
+		bodyOp, readErr := io.ReadAll(respOp.Body)
+		if readErr != nil {
+			monitor.ReportError(ctx, readErr, "action", "antigravity_read_onboard_polling_body")
+		}
+		if closeErr := respOp.Body.Close(); closeErr != nil {
+			monitor.ReportError(ctx, closeErr, "action", "antigravity_close_onboard_polling_body")
+		}
 		if respOp.StatusCode != 200 {
 			continue
 		}
@@ -1427,7 +1455,11 @@ func (p *Provider) refreshToken(refreshToken string) (*TokenData, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			monitor.ReportError(context.Background(), err, "action", "antigravity_close_refresh_body")
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("refresh failed status %d: %s", resp.StatusCode, string(body))
@@ -1517,7 +1549,11 @@ func (p *Provider) exchangeCode(code, verifier string) (*TokenData, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			monitor.ReportError(context.Background(), err, "action", "antigravity_close_exchange_body")
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("exchange failed status %d: %s", resp.StatusCode, string(body))

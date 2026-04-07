@@ -64,13 +64,14 @@ func (m *IncomingMessage) ToTurn() (message.Turn, error) {
 	// Fast path based on first byte
 	firstByte := firstNonSpaceByte(m.Content)
 
-	if firstByte == '"' {
+	switch firstByte {
+	case '"':
 		// Try parsing as string
 		var contentStr string
 		if err := json.Unmarshal(m.Content, &contentStr); err == nil {
 			parts = append(parts, parseText(contentStr)...)
 		}
-	} else if firstByte == '[' {
+	case '[':
 		// Try parsing as list of blocks
 		var blocks []ContentBlock
 		if err := json.Unmarshal(m.Content, &blocks); err == nil {
@@ -93,7 +94,7 @@ func (m *IncomingMessage) ToTurn() (message.Turn, error) {
 				}
 			}
 		}
-	} else {
+	default:
 		// Fallback for unknown types or failed fast-path
 		var contentStr string
 		if err := json.Unmarshal(m.Content, &contentStr); err == nil {
@@ -160,12 +161,13 @@ func extractContent(raw json.RawMessage) string {
 	}
 
 	firstByte := firstNonSpaceByte(raw)
-	if firstByte == '"' {
+	switch firstByte {
+	case '"':
 		var s string
 		if err := json.Unmarshal(raw, &s); err == nil {
 			return s
 		}
-	} else if firstByte == '[' {
+	case '[':
 		var blocks []ContentBlock
 		if err := json.Unmarshal(raw, &blocks); err == nil {
 			var parts []string
