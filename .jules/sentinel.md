@@ -1,0 +1,1 @@
+- 2026-04-08: Ignored deferred Close() errors mask upstream IO issues and allow silent resource failure. Use explicit error checking with centralized monitor.ReportError.

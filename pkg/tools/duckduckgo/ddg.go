@@ -12,6 +12,7 @@ import (
 	json "github.com/goccy/go-json"
 
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/lucasew/mclone/pkg/tools"
 	"golang.org/x/net/html"
@@ -69,7 +70,11 @@ func search(ctx context.Context, query string, maxResults int) ([]searchResult, 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			monitor.ReportError(ctx, err, "action", "close_ddg_response_body")
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("DDG returned status %d", resp.StatusCode)

@@ -39,7 +39,11 @@ func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			monitor.ReportError(ctx, err, "action", "close_anthropic_models_body")
+		}
+	}()
 
 	var result struct {
 		Data []struct {
@@ -101,7 +105,11 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req message.Request) (<-ch
 	out := make(chan message.Event)
 	go func() {
 		defer close(out)
-		defer stream.Close()
+		defer func() {
+			if err := stream.Close(); err != nil {
+				monitor.ReportError(ctx, err, "action", "close_anthropic_stream")
+			}
+		}()
 
 		// Track tool calls by index
 		toolCalls := make(map[int64]*message.ToolCall)
