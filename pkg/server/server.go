@@ -9,6 +9,9 @@ import (
 	openaiprotocol "github.com/lucasew/mclone/pkg/protocol/openai"
 )
 
+// New creates a new API Server instance initialized with the given configuration.
+// It also sets up the appropriate protocol writers for translating unified internal
+// representation back to standard client protocols.
 func New(cfg Config) *Server {
 	return &Server{
 		cfg:             cfg,
@@ -17,6 +20,9 @@ func New(cfg Config) *Server {
 	}
 }
 
+// Handler configures and returns an http.Handler containing all API routes.
+// This includes chat completion endpoints, pprof debugging tools, and standard middleware
+// for request decompression and logging.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +64,8 @@ func (s *Server) Handler() http.Handler {
 	return requestDecompressionMiddleware(handler)
 }
 
+// ListenAndServe starts the HTTP server using the configured routes on the given address.
+// This is a blocking call and delegates directly to the standard library http.ListenAndServe.
 func (s *Server) ListenAndServe(addr string) error {
 	return http.ListenAndServe(addr, s.Handler())
 }

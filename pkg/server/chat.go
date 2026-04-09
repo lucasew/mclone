@@ -19,6 +19,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// chatRequest represents an incoming chat completion payload.
+// It acts as an intermediate structure that normalizes fields like system prompts,
+// tools, and generation options before they are converted into the internal message representation.
 type chatRequest struct {
 	Model        string                     `json:"model"`
 	Messages     []protocol.IncomingMessage `json:"messages"`
@@ -37,6 +40,9 @@ type chatRequest struct {
 	StopSequences []string `json:"stop_sequences,omitempty"`
 }
 
+// serveChatRequest processes an incoming chat request, dispatches it to the
+// configured remote provider, and writes the response back using the specified protocol writer.
+// It handles telemetry tracing, message parsing, default option merging, and response stream tracking.
 func (s *Server) serveChatRequest(w http.ResponseWriter, r *http.Request, writer protocol.Writer) {
 	ctx, reqSpan := otel.Tracer("mclone/serve").Start(r.Context(), "serve.chat_request",
 		trace.WithAttributes(

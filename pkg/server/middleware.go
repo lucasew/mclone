@@ -54,11 +54,17 @@ func decodedRequestBody(r *http.Request) (io.ReadCloser, error) {
 	}
 }
 
+// compositeReadCloser aggregates multiple io.Closer implementations.
+// This is used for chained decoders where both the decompressor and
+// the underlying body need to be explicitly closed.
 type compositeReadCloser struct {
 	io.Reader
 	closers []io.Closer
 }
 
+// zstdCloser wraps a zstd.Decoder to implement the io.Closer interface.
+// Since zstd.Decoder provides a Close method with no return value, this wrapper
+// maps it to the standard io.Closer signature by returning nil.
 type zstdCloser struct{ *zstd.Decoder }
 
 func (z zstdCloser) Close() error {

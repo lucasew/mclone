@@ -41,6 +41,10 @@ func (s *Server) serveModels(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ParseGenerationDefaults extracts standard chat generation constraints (temperature, top_p,
+// max_tokens, stop sequences) from an arbitrary options map. It is primarily used to
+// resolve default constraints specified in server configurations or client overrides, handling
+// type coercion for numbers and strings as necessary.
 func ParseGenerationDefaults(opts map[string]any) message.ChatOptions {
 	var co message.ChatOptions
 	if v, ok := opts["temperature"]; ok {
