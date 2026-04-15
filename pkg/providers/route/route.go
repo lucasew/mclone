@@ -28,7 +28,11 @@ func (p *RouteProvider) List(ctx context.Context) ([]remote.Model, error) {
 		if r.modelName != "" {
 			name = fmt.Sprintf("%s → %s", slug, r.modelName)
 		}
-		models = append(models, remote.Model{Slug: slug, Name: name})
+		models = append(models, remote.Model{
+			Slug:    slug,
+			Name:    name,
+			OwnedBy: []string{r.provider.Name()},
+		})
 	}
 	return models, nil
 }

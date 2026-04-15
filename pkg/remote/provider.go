@@ -7,8 +7,9 @@ import (
 )
 
 type Model struct {
-	Name string // display name
-	Slug string // identifier for --model
+	Name    string   // display name
+	Slug    string   // identifier for --model
+	OwnedBy []string // backend/provider labels used by /v1/models
 }
 
 type Provider interface {

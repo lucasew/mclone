@@ -317,6 +317,7 @@ func (p *exportedProvider) List(ctx context.Context) ([]Model, error) {
 				conflicts = append(conflicts, fmt.Sprintf("%s (%s, %s)", model.Slug, existing.backend.name, backend.name))
 				continue
 			}
+			model.OwnedBy = []string{backend.name}
 			p.models[model.Slug] = exportedModel{backend: backend, model: model}
 		}
 	}

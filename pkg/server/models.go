@@ -30,8 +30,12 @@ func (s *Server) serveModels(w http.ResponseWriter, r *http.Request) {
 	}{Object: "list", Data: []modelEntry{}}
 
 	for _, m := range models {
+		ownedBy := s.cfg.Provider.Name()
+		if len(m.OwnedBy) > 0 {
+			ownedBy = strings.Join(m.OwnedBy, ",")
+		}
 		resp.Data = append(resp.Data, modelEntry{
-			ID: m.Slug, Object: "model", Created: 1677610602, OwnedBy: "mclone",
+			ID: m.Slug, Object: "model", Created: 1677610602, OwnedBy: ownedBy,
 		})
 	}
 

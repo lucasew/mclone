@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -55,7 +56,7 @@ type BalanceProvider struct {
 func (p *BalanceProvider) Name() string { return "balance" }
 
 func (p *BalanceProvider) List(ctx context.Context) ([]remote.Model, error) {
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 	var all []remote.Model
 	for _, b := range p.backends {
 		models, err := b.provider.List(ctx)
@@ -64,10 +65,19 @@ func (p *BalanceProvider) List(ctx context.Context) ([]remote.Model, error) {
 			continue
 		}
 		for _, m := range models {
-			if !seen[m.Slug] {
-				seen[m.Slug] = true
-				all = append(all, m)
+			if idx, ok := seen[m.Slug]; ok {
+				if !slices.Contains(all[idx].OwnedBy, b.name) {
+					all[idx].OwnedBy = append(all[idx].OwnedBy, b.name)
+					slices.Sort(all[idx].OwnedBy)
+				}
+				continue
 			}
+			if !slices.Contains(m.OwnedBy, b.name) {
+				m.OwnedBy = append(m.OwnedBy, b.name)
+			}
+			slices.Sort(m.OwnedBy)
+			seen[m.Slug] = len(all)
+			all = append(all, m)
 		}
 	}
 	return all, nil

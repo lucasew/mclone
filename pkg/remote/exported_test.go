@@ -60,6 +60,12 @@ func TestExportedProviderListsExportedRemotes(t *testing.T) {
 	if models[0].Slug != "alpha" || models[1].Slug != "beta" {
 		t.Fatalf("unexpected models: %#v", models)
 	}
+	if len(models[0].OwnedBy) != 1 || models[0].OwnedBy[0] != "a" {
+		t.Fatalf("unexpected alpha owner: %#v", models[0].OwnedBy)
+	}
+	if len(models[1].OwnedBy) != 1 || models[1].OwnedBy[0] != "b" {
+		t.Fatalf("unexpected beta owner: %#v", models[1].OwnedBy)
+	}
 }
 
 func TestExportedProviderDetectsConflicts(t *testing.T) {

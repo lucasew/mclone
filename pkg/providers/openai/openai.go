@@ -55,7 +55,11 @@ func (p *OpenAIProvider) List(ctx context.Context) ([]remote.Model, error) {
 
 	models := make([]remote.Model, 0, len(result.Data))
 	for _, m := range result.Data {
-		models = append(models, remote.Model{Name: m.ID, Slug: m.ID})
+		model := remote.Model{Name: m.ID, Slug: m.ID}
+		if m.OwnedBy != "" {
+			model.OwnedBy = []string{m.OwnedBy}
+		}
+		models = append(models, model)
 	}
 	return models, nil
 }
