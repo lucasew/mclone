@@ -23,6 +23,7 @@ var serveCmd = &cobra.Command{
 			remoteName = strings.TrimSuffix(args[0], ":")
 		}
 		port, _ := cmd.Flags().GetInt("port")
+		host, _ := cmd.Flags().GetString("host")
 		overrideModel, _ := cmd.Flags().GetString("model")
 		verbose, _ := cmd.Flags().GetBool("verbose")
 		saveRawRequest, _ := cmd.Flags().GetString("save-raw-request")
@@ -73,9 +74,9 @@ var serveCmd = &cobra.Command{
 			cfg.DefaultChatOptions = server.ParseGenerationDefaults(rc.Options)
 		}
 
-		slog.Info("starting server", "remote", remoteNameOrExported(remoteName), "port", port)
+		slog.Info("starting server", "remote", remoteNameOrExported(remoteName), "host", host, "port", port)
 		srv := server.New(cfg)
-		if err := srv.ListenAndServe(fmt.Sprintf(":%d", port)); err != nil {
+		if err := srv.ListenAndServe(fmt.Sprintf("%s:%d", host, port)); err != nil {
 			monitor.ReportError(cmd.Context(), err, "action", "server_listen")
 		}
 	},
@@ -83,6 +84,7 @@ var serveCmd = &cobra.Command{
 
 func init() {
 	serveCmd.Flags().Int("port", 8080, "Port to listen on")
+	serveCmd.Flags().StringP("host", "H", "127.0.0.1", "Host to listen on")
 	serveCmd.Flags().String("model", "", "Force a specific model name (useful for Claude Code)")
 	serveCmd.Flags().BoolP("verbose", "v", false, "Enable debug logs")
 	serveCmd.Flags().String("save-raw-request", "", "Path to save the raw incoming request body (overwrites)")

@@ -1,0 +1,1 @@
+- 2026-04-15: Default unauthenticated server listen interfaces (0.0.0.0 vs 127.0.0.1) - Check ListenAndServe calls with fmt.Sprintf(":%d") to verify they bind explicitly to localhost by default instead of all interfaces.
