@@ -17,6 +17,7 @@ import (
 
 	"codeberg.org/readeck/go-readability/v2"
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/lucasew/mclone/pkg/tools"
 	"github.com/mattn/godown"
@@ -136,7 +137,11 @@ func (s *webfetchSource) fetchAndParse(ctx context.Context, rawLink string, form
 	if err != nil {
 		return "", err
 	}
-	defer res.Body.Close()
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			monitor.ReportError(ctx, err, "failed to close response body")
+		}
+	}()
 
 	reader := io.LimitReader(res.Body, s.maxBodySize)
 

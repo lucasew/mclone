@@ -35,7 +35,11 @@ func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			monitor.ReportError(ctx, err, "failed to close response body")
+		}
+	}()
 
 	var tags struct {
 		Models []struct {
@@ -95,7 +99,11 @@ func (p *OllamaProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	out := make(chan message.Event)
 	go func() {
 		defer close(out)
-		defer stream.Close()
+		defer func() {
+			if err := stream.Close(); err != nil {
+				monitor.ReportError(ctx, err, "failed to close stream")
+			}
+		}()
 
 		startTime := time.Now()
 

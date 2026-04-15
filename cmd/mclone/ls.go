@@ -45,11 +45,11 @@ func listModels(resolveProvider func() (remote.Provider, error)) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "SLUG\tNAME")
+	_, _ = fmt.Fprintln(w, "SLUG\tNAME")
 	for _, m := range models {
-		fmt.Fprintf(w, "%s\t%s\n", m.Slug, m.Name)
+		_, _ = fmt.Fprintf(w, "%s\t%s\n", m.Slug, m.Name)
 	}
-	w.Flush()
+	_ = w.Flush()
 }
 
 func init() {

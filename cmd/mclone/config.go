@@ -90,12 +90,12 @@ func interactiveConfig(ctx context.Context) {
 		sort.Strings(names)
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tTYPE")
+		_, _ = fmt.Fprintln(w, "NAME\tTYPE")
 		for _, name := range names {
 			r := conf.Remotes[name]
-			fmt.Fprintf(w, "%s\t%s\n", name, r.Type)
+			_, _ = fmt.Fprintf(w, "%s\t%s\n", name, r.Type)
 		}
-		w.Flush()
+		_ = w.Flush()
 
 		fmt.Println("\ne) Edit existing remote")
 		fmt.Println("n) New remote")
@@ -137,11 +137,11 @@ func interactiveConfig(ctx context.Context) {
 			fmt.Println("Available provider types:")
 
 			typeWriter := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-			fmt.Fprintln(typeWriter, "#\tTYPE")
+			_, _ = fmt.Fprintln(typeWriter, "#\tTYPE")
 			for i, t := range types {
-				fmt.Fprintf(typeWriter, "%d\t%s\n", i+1, t)
+				_, _ = fmt.Fprintf(typeWriter, "%d\t%s\n", i+1, t)
 			}
-			typeWriter.Flush()
+			_ = typeWriter.Flush()
 
 			fmt.Print("Select type (number or name): ")
 			typeChoice, _ := reader.ReadString('\n')

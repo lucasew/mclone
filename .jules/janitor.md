@@ -1,0 +1,1 @@
+- 2026-04-15: Fix lints across the codebase by checking error returns and simplifying expressions.
