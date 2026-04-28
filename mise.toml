@@ -31,7 +31,7 @@ run = "workspaced codebase format"
 
 [tasks.ci]
 description = "Run CI pipeline"
-depends = ["lint", "test", "build"]
+depends = ["lint", "test"]
 
 [tasks.release]
 description = "Run a release"

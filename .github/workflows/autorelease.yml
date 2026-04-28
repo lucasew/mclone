@@ -1,0 +1,54 @@
+name: Auto Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  mise-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup mise
+        uses: jdx/mise-action@v3
+
+      - name: Install dependencies
+        run: mise run install
+
+      - name: Codegen
+        run: mise run codegen
+
+      - name: PR if Difference
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: update generated code"
+          title: "chore: update generated code"
+          body: "Automated PR to update generated code from codegen step."
+          branch: "chore/update-codegen"
+
+      - name: CI
+        run: mise run ci
+
+      - name: Release
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create ${{ github.ref_name || 'latest' }} --generate-notes
+
+      - name: Upload Artifacts
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mclone-binaries
+          path: dist/
