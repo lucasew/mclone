@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -20,7 +19,7 @@ func WithLoader(ctx context.Context, loader *ConfigLoader) context.Context {
 func LoaderFrom(ctx context.Context) *ConfigLoader {
 	l, ok := ctx.Value(contextKey{}).(*ConfigLoader)
 	if !ok {
-		panic(fmt.Sprintf("config.LoaderFrom: no ConfigLoader in context"))
+		panic("config.LoaderFrom: no ConfigLoader in context")
 	}
 	return l
 }

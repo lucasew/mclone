@@ -1,0 +1,1 @@
+- 2026-06-14: Use type conversion instead of struct literals for identical types, and remove unnecessary fmt.Sprintf calls with constant strings.
