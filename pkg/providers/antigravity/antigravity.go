@@ -1149,7 +1149,7 @@ func sanitizeToolName(name string) string {
 		return "tool"
 	}
 	first := sanitized[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && first != '_' {
 		sanitized = "_" + sanitized
 	}
 	if len(sanitized) > 128 {
