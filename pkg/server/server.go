@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/pprof"
+	"time"
 
 	anthropicprotocol "github.com/lucasew/mclone/pkg/protocol/anthropic"
 	openaiprotocol "github.com/lucasew/mclone/pkg/protocol/openai"
@@ -59,5 +60,15 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) ListenAndServe(addr string) error {
-	return http.ListenAndServe(addr, s.Handler())
+	// ReadHeaderTimeout bounds slowloris-style header stalls.
+	// IdleTimeout reclaims keep-alive connections left idle.
+	// WriteTimeout is left at 0: chat/responses stream via SSE and can run
+	// longer than any short global write deadline.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	return srv.ListenAndServe()
 }
