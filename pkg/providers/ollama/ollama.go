@@ -30,12 +30,19 @@ func (p *OllamaProvider) Name() string { return "ollama" }
 func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	url := fmt.Sprintf("%s/api/tags", p.BaseURL)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ollama list request: %w", err)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ollama list: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ollama list: unexpected status %d", resp.StatusCode)
+	}
 
 	var tags struct {
 		Models []struct {
@@ -44,7 +51,7 @@ func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 		} `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ollama list decode: %w", err)
 	}
 
 	var models []remote.Model
