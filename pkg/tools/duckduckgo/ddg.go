@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	json "github.com/goccy/go-json"
 
@@ -17,9 +18,16 @@ import (
 	"golang.org/x/net/html"
 )
 
+const defaultTimeout = 30 * time.Second
+
 var (
 	urlRegex         = regexp.MustCompile(`uddg=([^&"]*)`)
 	searchToolSchema = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"The search query"}},"required":["query"]}`)
+
+	// httpClient is the client used for DuckDuckGo HTML search. Bounded
+	// Timeout prevents hung tool calls if DDG stalls; request context still
+	// cancels earlier via NewRequestWithContext.
+	httpClient = &http.Client{Timeout: defaultTimeout}
 )
 
 type ddgConfig struct {
@@ -65,7 +73,7 @@ func search(ctx context.Context, query string, maxResults int) ([]searchResult, 
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
