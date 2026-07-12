@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,13 +61,15 @@ func (c *ConfigLoader) GetLocation() (string, error) {
 	if err == nil {
 		return c.Location, nil
 	}
-	if err == os.ErrNotExist {
-		f, err := os.Create(c.Location)
-		if err != nil {
-			return "", err
-		}
-		defer f.Close()
+	// os.Stat returns *fs.PathError wrapping ErrNotExist; == never matches.
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
 	}
+	f, err := os.Create(c.Location)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
 	return c.Location, nil
 }
 
