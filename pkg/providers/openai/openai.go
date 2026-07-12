@@ -3,10 +3,13 @@ package openai
 import (
 	"context"
 	"fmt"
-	json "github.com/goccy/go-json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
+
+	json "github.com/goccy/go-json"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
@@ -16,6 +19,10 @@ import (
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 )
+
+// listHTTPClient bounds List so a hung /models endpoint cannot block forever.
+// http.DefaultClient has no Timeout.
+var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type OpenAIProvider struct {
 	BaseURL string
@@ -37,11 +44,20 @@ func (p *OpenAIProvider) List(ctx context.Context) ([]remote.Model, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+p.APIKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := listHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		msg := strings.TrimSpace(string(body))
+		if msg != "" {
+			return nil, fmt.Errorf("openai list models: status %d: %s", resp.StatusCode, msg)
+		}
+		return nil, fmt.Errorf("openai list models: status %d", resp.StatusCode)
+	}
 
 	var result struct {
 		Data []struct {
