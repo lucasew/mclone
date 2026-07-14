@@ -2,9 +2,14 @@ package anthropic
 
 import (
 	"context"
-	json "github.com/goccy/go-json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
+
+	json "github.com/goccy/go-json"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
@@ -13,6 +18,10 @@ import (
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
+
+// listHTTPClient bounds List so a hung /v1/models endpoint cannot block forever.
+// http.DefaultClient has no Timeout.
+var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type AnthropicProvider struct {
 	BaseURL string
@@ -27,7 +36,11 @@ type AnthropicConfig struct {
 func (p *AnthropicProvider) Name() string { return "anthropic" }
 
 func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
-	url := "https://api.anthropic.com/v1/models"
+	base := "https://api.anthropic.com"
+	if p.BaseURL != "" {
+		base = strings.TrimRight(p.BaseURL, "/")
+	}
+	url := base + "/v1/models"
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -35,11 +48,20 @@ func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
 	req.Header.Set("x-api-key", p.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := listHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		msg := strings.TrimSpace(string(body))
+		if msg != "" {
+			return nil, fmt.Errorf("anthropic list models: status %d: %s", resp.StatusCode, msg)
+		}
+		return nil, fmt.Errorf("anthropic list models: status %d", resp.StatusCode)
+	}
 
 	var result struct {
 		Data []struct {
