@@ -160,7 +160,7 @@ func toSDKMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnio
 				case message.TextPart:
 					text += v.Text
 				case message.ToolResultPart:
-					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
+					out = append(out, sdk.ToolMessage(v.Content, v.ToolCallID))
 				}
 			}
 			if text != "" {
@@ -198,7 +198,7 @@ func toSDKMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnio
 		case message.RoleTool:
 			for _, p := range m.Parts {
 				if v, ok := p.(message.ToolResultPart); ok {
-					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
+					out = append(out, sdk.ToolMessage(v.Content, v.ToolCallID))
 				}
 			}
 		}

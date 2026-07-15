@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/lucasew/mclone/pkg/message"
 )
 
 func TestListSuccess(t *testing.T) {
@@ -91,5 +93,46 @@ func TestListRequestError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "request") {
 		t.Errorf("error %q should mention request construction", err)
+	}
+}
+
+func TestToSDKMessagesToolResultOrder(t *testing.T) {
+	t.Parallel()
+
+	// openai-go ToolMessage is (content, toolCallID). Swapping them puts the
+	// tool call id in the content field and breaks multi-turn tool loops.
+	const callID = "call_abc123"
+	const content = `{"temp": 72}`
+
+	msgs := toSDKMessages([]message.Turn{
+		{
+			Role: message.RoleTool,
+			Parts: []message.Part{
+				message.ToolResultPart{ToolCallID: callID, Content: content},
+			},
+		},
+		{
+			Role: message.RoleUser,
+			Parts: []message.Part{
+				message.ToolResultPart{ToolCallID: callID, Content: content},
+			},
+		},
+	})
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	for i, m := range msgs {
+		if m.OfTool == nil {
+			t.Fatalf("msgs[%d]: expected tool message, got %#v", i, m)
+		}
+		if m.OfTool.ToolCallID != callID {
+			t.Errorf("msgs[%d].ToolCallID = %q, want %q", i, m.OfTool.ToolCallID, callID)
+		}
+		if !m.OfTool.Content.OfString.Valid() {
+			t.Fatalf("msgs[%d]: content OfString not set", i)
+		}
+		if got := m.OfTool.Content.OfString.Or(""); got != content {
+			t.Errorf("msgs[%d].Content = %q, want %q", i, got, content)
+		}
 	}
 }
