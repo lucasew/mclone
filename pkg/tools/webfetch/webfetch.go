@@ -138,6 +138,12 @@ func (s *webfetchSource) fetchAndParse(ctx context.Context, rawLink string, form
 	}
 	defer res.Body.Close()
 
+	// Non-2xx bodies are usually error pages; do not feed them to the
+	// readability parser as if they were the requested article.
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return "", fmt.Errorf("webfetch: unexpected status %d for %s", res.StatusCode, link.String())
+	}
+
 	reader := io.LimitReader(res.Body, s.maxBodySize)
 
 	node, err := html.Parse(reader)
