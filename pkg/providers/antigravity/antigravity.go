@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os/exec"
@@ -36,6 +37,28 @@ const (
 	tokenURL     = "https://oauth2.googleapis.com/token"
 	userAgent    = "antigravity/1.20.6"
 )
+
+// httpClient bounds short OAuth/onboarding calls. http.DefaultClient has no Timeout.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// streamHTTPClient is used for SSE chat. No overall Timeout so long streams can
+// complete; dial and response-header deadlines still bound connection stalls.
+// The request context cancels the body read when the caller aborts.
+var streamHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 func invertBits(s string) string {
 	b := []byte(s)
@@ -377,7 +400,7 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 			req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 			req.ContentLength = int64(len(body))
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := streamHTTPClient.Do(req)
 			if err != nil {
 				lastErr = err
 				slog.Warn("antigravity_endpoint_error", "endpoint", endpoint, "error", err)
@@ -1333,7 +1356,7 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -1370,7 +1393,7 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 		opURL := "https://cloudcode-pa.googleapis.com/v1internal/" + opName
 		reqOp, _ := http.NewRequestWithContext(ctx, "GET", opURL, nil)
 		reqOp.Header = req.Header
-		respOp, err := http.DefaultClient.Do(reqOp)
+		respOp, err := httpClient.Do(reqOp)
 		if err != nil {
 			continue
 		}
@@ -1423,7 +1446,7 @@ func (p *Provider) refreshToken(refreshToken string) (*TokenData, error) {
 	data.Set("client_secret", clientSecret)
 	data.Set("refresh_token", refreshToken)
 	data.Set("grant_type", "refresh_token")
-	resp, err := http.PostForm(tokenURL, data)
+	resp, err := httpClient.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, err
 	}
@@ -1468,7 +1491,8 @@ func (p *Provider) performLoginFlow(ctx context.Context) (*TokenData, error) {
 		}
 		codeCh <- code
 	})
-	srv := &http.Server{Addr: ":" + redirectPort, Handler: mux}
+	// ReadHeaderTimeout bounds slowloris-style header stalls on the local OAuth callback.
+	srv := &http.Server{Addr: ":" + redirectPort, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 			errCh <- err
@@ -1513,7 +1537,7 @@ func (p *Provider) exchangeCode(code, verifier string) (*TokenData, error) {
 	data.Set("redirect_uri", redirectURI)
 	data.Set("grant_type", "authorization_code")
 	data.Set("code_verifier", verifier)
-	resp, err := http.PostForm(tokenURL, data)
+	resp, err := httpClient.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, err
 	}
