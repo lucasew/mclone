@@ -9,6 +9,7 @@ import (
 
 	"github.com/lucasew/mclone/pkg/config"
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/tools"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -146,6 +147,78 @@ func TestExportedProviderIncludesImplicitBalanceGroup(t *testing.T) {
 	}
 	if models[0].Slug != "alpha" || models[1].Slug != "beta" {
 		t.Fatalf("unexpected models: %#v", models)
+	}
+}
+
+// passthroughChatProvider emits a tool call the exported layer does not own,
+// plus ResponseCompleted with StopReasonToolCall — the same shape clients rely
+// on for multi-turn tool loops.
+type passthroughChatProvider struct {
+	models []Model
+}
+
+func (p *passthroughChatProvider) Name() string { return "passthrough" }
+
+func (p *passthroughChatProvider) List(context.Context) ([]Model, error) { return p.models, nil }
+
+func (p *passthroughChatProvider) Chat(context.Context, message.Request) (<-chan message.Event, error) {
+	ch := make(chan message.Event, 2)
+	ch <- message.ToolCallFinished{
+		Call: message.ToolCall{
+			ID:        "call_1",
+			Name:      "exec",
+			Arguments: []byte(`{"command":"ls"}`),
+		},
+	}
+	ch <- message.ResponseCompleted{Reason: message.StopReasonToolCall}
+	close(ch)
+	return ch, nil
+}
+
+func TestExportedChatWithToolsPreservesToolCallFinishReason(t *testing.T) {
+	t.Parallel()
+
+	backend := exportedBackend{
+		name: "demo",
+		provider: &passthroughChatProvider{
+			models: []Model{{Slug: "demo-model", Name: "demo"}},
+		},
+	}
+	// Non-empty tools force chatWithTools; toolMap empty so "exec" is passthrough.
+	provider := &exportedProvider{
+		backends: []exportedBackend{backend},
+		models: map[string]exportedModel{
+			"demo-model": {backend: backend, model: Model{Slug: "demo-model", Name: "demo"}},
+		},
+		tools: []tools.Tool{{
+			Definition: message.ToolDefinition{Name: "owned_local_tool"},
+		}},
+		toolMap: map[string]tools.Tool{},
+	}
+
+	ch, err := provider.Chat(context.Background(), message.Request{Model: "demo-model"})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	var sawToolCall bool
+	var finalReason message.StopReason
+	for event := range ch {
+		switch ev := event.(type) {
+		case message.ToolCallFinished:
+			sawToolCall = true
+		case message.ResponseCompleted:
+			finalReason = ev.Reason
+		case message.ResponseError:
+			t.Fatalf("unexpected response error: %v", ev.Err)
+		}
+	}
+
+	if !sawToolCall {
+		t.Fatal("expected passthrough tool call")
+	}
+	if finalReason != message.StopReasonToolCall {
+		t.Fatalf("expected finish reason %q, got %q", message.StopReasonToolCall, finalReason)
 	}
 }
 

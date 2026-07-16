@@ -384,6 +384,10 @@ func (p *exportedProvider) chatWithTools(ctx context.Context, req message.Reques
 			var assistantParts []message.Part
 			var handledCalls []message.ToolCall
 			var passthroughCalls []message.ToolCall
+			// Preserve the base provider's stop reason (e.g. tool_call for
+			// passthrough tools). Hardcoding end_turn breaks OpenAI/Anthropic
+			// finish_reason / stop_reason for clients that only see exported tools.
+			completionReason := message.StopReasonEndTurn
 
 			for event := range ch {
 				switch ev := event.(type) {
@@ -401,6 +405,8 @@ func (p *exportedProvider) chatWithTools(ctx context.Context, req message.Reques
 					} else {
 						passthroughCalls = append(passthroughCalls, ev.Call)
 					}
+				case message.ResponseCompleted:
+					completionReason = ev.Reason
 				}
 			}
 
@@ -408,7 +414,7 @@ func (p *exportedProvider) chatWithTools(ctx context.Context, req message.Reques
 				for _, tc := range passthroughCalls {
 					out <- message.ToolCallFinished{Call: tc}
 				}
-				out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
+				out <- message.ResponseCompleted{Reason: completionReason}
 				return
 			}
 
