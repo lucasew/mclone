@@ -58,12 +58,18 @@ func (p *BalanceProvider) Name() string { return "balance" }
 func (p *BalanceProvider) List(ctx context.Context) ([]remote.Model, error) {
 	seen := make(map[string]int)
 	var all []remote.Model
+	var firstErr error
+	var anyOK bool
 	for _, b := range p.backends {
 		models, err := b.provider.List(ctx)
 		if err != nil {
 			slog.Warn("balance_list_error", "backend", b.name, "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
+		anyOK = true
 		for _, m := range models {
 			if idx, ok := seen[m.Slug]; ok {
 				if !slices.Contains(all[idx].OwnedBy, b.name) {
@@ -79,6 +85,11 @@ func (p *BalanceProvider) List(ctx context.Context) ([]remote.Model, error) {
 			seen[m.Slug] = len(all)
 			all = append(all, m)
 		}
+	}
+	// Partial failure is fine (union of healthy backends). Total failure must
+	// not look like an empty catalog with a successful List.
+	if !anyOK && firstErr != nil {
+		return nil, fmt.Errorf("all backends failed to list models: %w", firstErr)
 	}
 	return all, nil
 }
