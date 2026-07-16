@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"syscall"
 	"time"
 
@@ -98,13 +99,44 @@ func newSafeDialer(timeout time.Duration) *net.Dialer {
 				return err
 			}
 			for _, ip := range ips {
-				if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+				if isBlockedIP(ip) {
 					return errors.New("refusing to connect to private network address")
 				}
 			}
 			return nil
 		},
 	}
+}
+
+// isBlockedIP reports whether dialing ip would allow SSRF into local or
+// non-routable space. Matches Go's net.IP helpers used by the dial Control.
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsPrivate() ||
+		ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified()
+}
+
+// parseFetchURL requires an absolute http(s) URL with a host. Non-HTTP schemes
+// (file, gopher, …) and scheme-relative URLs are rejected before dial.
+func parseFetchURL(raw string) (*url.URL, error) {
+	link, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	scheme := strings.ToLower(link.Scheme)
+	if scheme != "http" && scheme != "https" {
+		if link.Scheme == "" {
+			return nil, errors.New("webfetch: URL must use http or https scheme")
+		}
+		return nil, fmt.Errorf("webfetch: unsupported URL scheme %q (only http and https)", link.Scheme)
+	}
+	if link.Host == "" {
+		return nil, errors.New("webfetch: URL missing host")
+	}
+	return link, nil
 }
 
 var userAgentPool = []string{
@@ -118,7 +150,7 @@ func getRandomUserAgent() string {
 }
 
 func (s *webfetchSource) fetchAndParse(ctx context.Context, rawLink string, format string) (string, error) {
-	link, err := url.Parse(rawLink)
+	link, err := parseFetchURL(rawLink)
 	if err != nil {
 		return "", err
 	}

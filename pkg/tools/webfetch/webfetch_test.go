@@ -2,12 +2,113 @@ package webfetch
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestParseFetchURL(t *testing.T) {
+	t.Parallel()
+
+	okCases := []string{
+		"https://example.com/article",
+		"http://example.com/",
+		"HTTPS://Example.COM/path?q=1",
+	}
+	for _, raw := range okCases {
+		u, err := parseFetchURL(raw)
+		if err != nil {
+			t.Errorf("parseFetchURL(%q): unexpected error: %v", raw, err)
+			continue
+		}
+		if u.Host == "" {
+			t.Errorf("parseFetchURL(%q): empty host", raw)
+		}
+	}
+
+	badCases := []struct {
+		raw     string
+		wantSub string
+	}{
+		{"file:///etc/passwd", "scheme"},
+		{"gopher://example.com/1", "scheme"},
+		{"//example.com/path", "scheme"},
+		{"not-a-url", "scheme"},
+		{"http:///no-host", "host"},
+		{"https://", "host"},
+	}
+	for _, tc := range badCases {
+		_, err := parseFetchURL(tc.raw)
+		if err == nil {
+			t.Errorf("parseFetchURL(%q): want error, got nil", tc.raw)
+			continue
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), tc.wantSub) {
+			t.Errorf("parseFetchURL(%q): error %q should mention %q", tc.raw, err, tc.wantSub)
+		}
+	}
+}
+
+func TestIsBlockedIP(t *testing.T) {
+	t.Parallel()
+
+	blocked := []string{
+		"127.0.0.1",
+		"::1",
+		"10.0.0.1",
+		"192.168.1.1",
+		"172.16.0.1",
+		"169.254.169.254",
+		"0.0.0.0",
+		"::",
+		"224.0.0.1",
+		"ff02::1",
+	}
+	for _, s := range blocked {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			t.Fatalf("ParseIP(%q) failed", s)
+		}
+		if !isBlockedIP(ip) {
+			t.Errorf("isBlockedIP(%s): want blocked", s)
+		}
+	}
+
+	allowed := []string{
+		"8.8.8.8",
+		"1.1.1.1",
+		"2001:4860:4860::8888",
+	}
+	for _, s := range allowed {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			t.Fatalf("ParseIP(%q) failed", s)
+		}
+		if isBlockedIP(ip) {
+			t.Errorf("isBlockedIP(%s): want allowed", s)
+		}
+	}
+}
+
+func TestFetchAndParseRejectsNonHTTPScheme(t *testing.T) {
+	t.Parallel()
+
+	s := &webfetchSource{
+		client:      plainClient(),
+		maxBodySize: defaultMaxBodySize,
+		toolName:    "WebFetch",
+	}
+	_, err := s.fetchAndParse(context.Background(), "file:///etc/passwd", "md")
+	if err == nil {
+		t.Fatal("fetchAndParse: want error for file:// URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "scheme") {
+		t.Errorf("error %q should mention scheme", err)
+	}
+}
 
 // plainClient is used in tests so httptest (loopback) is not blocked by the
 // production SSRF dialer in newHTTPClient.
