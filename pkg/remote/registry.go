@@ -1,10 +1,11 @@
 package remote
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/config"
@@ -74,7 +75,7 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 				remoteNames = append(remoteNames, name)
 			}
 		}
-		sort.Strings(remoteNames)
+		slices.Sort(remoteNames)
 
 		if len(remoteNames) == 0 {
 			return nil, fmt.Errorf("no exported remotes configured")
@@ -184,7 +185,7 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 			members = append(members, name)
 		}
 	}
-	sort.Strings(members)
+	slices.Sort(members)
 
 	if len(members) == 0 {
 		if exactMatch {
@@ -323,7 +324,7 @@ func (p *exportedProvider) List(ctx context.Context) ([]Model, error) {
 	}
 
 	if len(conflicts) > 0 {
-		sort.Strings(conflicts)
+		slices.Sort(conflicts)
 		return nil, fmt.Errorf("exported model slug conflicts: %s", strings.Join(conflicts, ", "))
 	}
 
@@ -459,8 +460,8 @@ func (p *exportedProvider) sortedModels() []Model {
 	for _, entry := range p.models {
 		models = append(models, entry.model)
 	}
-	sort.Slice(models, func(i, j int) bool {
-		return models[i].Slug < models[j].Slug
+	slices.SortFunc(models, func(a, b Model) int {
+		return cmp.Compare(a.Slug, b.Slug)
 	})
 	return models
 }
