@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -23,6 +24,25 @@ import (
 // listHTTPClient bounds List so a hung /models endpoint cannot block forever.
 // http.DefaultClient has no Timeout.
 var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+// streamHTTPClient is used for Chat SSE. No overall Timeout so long streams can
+// complete; dial and response-header deadlines still bound connection stalls.
+// The request context cancels the body read when the caller aborts.
+var streamHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 type OpenAIProvider struct {
 	BaseURL string
@@ -84,6 +104,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	client := sdk.NewClient(
 		option.WithBaseURL(p.BaseURL),
 		option.WithAPIKey(p.APIKey),
+		option.WithHTTPClient(streamHTTPClient),
 	)
 
 	logOpenAIRequestDebug(req)
