@@ -3,6 +3,7 @@ package antigravity
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,7 +15,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,8 +125,8 @@ func (p *Provider) List(ctx context.Context) ([]remote.Model, error) {
 	for slug, name := range supportedModels {
 		models = append(models, remote.Model{Name: name, Slug: slug})
 	}
-	sort.Slice(models, func(i, j int) bool {
-		return models[i].Slug < models[j].Slug
+	slices.SortFunc(models, func(a, b remote.Model) int {
+		return cmp.Compare(a.Slug, b.Slug)
 	})
 	return models, nil
 }

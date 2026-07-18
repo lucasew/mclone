@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -87,7 +87,7 @@ func interactiveConfig(ctx context.Context) {
 		for name := range conf.Remotes {
 			names = append(names, name)
 		}
-		sort.Strings(names)
+		slices.Sort(names)
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tTYPE")
@@ -133,7 +133,7 @@ func interactiveConfig(ctx context.Context) {
 			}
 
 			types := remote.ListTypes()
-			sort.Strings(types)
+			slices.Sort(types)
 			fmt.Println("Available provider types:")
 
 			typeWriter := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
