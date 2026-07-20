@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -22,6 +23,25 @@ import (
 // listHTTPClient bounds List so a hung /v1/models endpoint cannot block forever.
 // http.DefaultClient has no Timeout.
 var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+// streamHTTPClient is used for Chat SSE. No overall Timeout so long streams can
+// complete; dial and response-header deadlines still bound connection stalls.
+// The request context cancels the body read when the caller aborts.
+var streamHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 type AnthropicProvider struct {
 	BaseURL string
@@ -80,7 +100,10 @@ func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
-	opts := []option.RequestOption{option.WithAPIKey(p.APIKey)}
+	opts := []option.RequestOption{
+		option.WithAPIKey(p.APIKey),
+		option.WithHTTPClient(streamHTTPClient),
+	}
 	if p.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(p.BaseURL))
 	}
