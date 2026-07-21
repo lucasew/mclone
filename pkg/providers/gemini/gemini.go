@@ -3,17 +3,43 @@ package gemini
 import (
 	"context"
 	"fmt"
-	json "github.com/goccy/go-json"
 	"log/slog"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	json "github.com/goccy/go-json"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 	"google.golang.org/genai"
 )
+
+// listHTTPClient bounds List so a hung models endpoint cannot block forever.
+// genai.NewClient defaults to &http.Client{} with no Timeout when HTTPClient is nil.
+var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+// streamHTTPClient is used for Chat SSE. No overall Timeout so long streams can
+// complete; dial and response-header deadlines still bound connection stalls.
+// The request context cancels the body read when the caller aborts.
+var streamHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 var signatureCache sync.Map
 var toolDefinitionCache sync.Map
@@ -32,7 +58,7 @@ type GeminiConfig struct {
 func (p *GeminiProvider) Name() string { return "gemini" }
 
 func (p *GeminiProvider) List(ctx context.Context) ([]remote.Model, error) {
-	client, err := p.client(ctx)
+	client, err := p.client(ctx, listHTTPClient)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +73,7 @@ func (p *GeminiProvider) List(ctx context.Context) ([]remote.Model, error) {
 }
 
 func (p *GeminiProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
-	client, err := p.client(ctx)
+	client, err := p.client(ctx, streamHTTPClient)
 	if err != nil {
 		return nil, err
 	}
@@ -199,12 +225,14 @@ func CleanToolCallArgs(tc message.ToolCall, schema json.RawMessage) json.RawMess
 	return json.RawMessage(cleaned)
 }
 
-func (p *GeminiProvider) client(ctx context.Context) (*genai.Client, error) {
+func (p *GeminiProvider) client(ctx context.Context, httpClient *http.Client) (*genai.Client, error) {
 	if p.ClientFactory != nil {
 		return p.ClientFactory(ctx)
 	}
 	return genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: p.APIKey, Backend: genai.BackendGeminiAPI,
+		APIKey:     p.APIKey,
+		Backend:    genai.BackendGeminiAPI,
+		HTTPClient: httpClient,
 	})
 }
 
