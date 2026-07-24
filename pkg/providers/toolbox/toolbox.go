@@ -143,8 +143,12 @@ func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan
 			slog.Info("toolbox_requery", "loop", loop+1, "handled", len(handledCalls))
 		}
 
+		// Exhausting the loop budget means the model kept requesting owned
+		// tools without producing a terminal reply. Completing with end_turn
+		// looks like success to clients; surface an error instead.
+		err := fmt.Errorf("toolbox: max tool loops (%d) exceeded", p.maxLoops)
 		slog.Warn("toolbox_max_loops", "max", p.maxLoops)
-		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
+		out <- message.ResponseError{Err: err}
 	}()
 	return out, nil
 }
