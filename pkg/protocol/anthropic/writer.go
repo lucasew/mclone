@@ -48,6 +48,15 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 		switch ev := event.(type) {
 		case message.ResponseError:
 			slog.Error("anthropic_stream_error", "error", ev.Err)
+			// Generic message only — never leak backend err.Error() to clients.
+			protocol.WriteSSE(rw, "error", map[string]any{
+				"type": "error",
+				"error": map[string]any{
+					"type":    "api_error",
+					"message": "internal server error",
+				},
+			})
+			return
 		case message.ReasoningDelta:
 			protocol.WriteSSE(rw, "content_block_start", ContentBlockStartEvent{
 				Type:         "content_block_start",
@@ -131,6 +140,16 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, mode
 			toolCalls = append(toolCalls, ev.Call)
 		case message.ResponseError:
 			slog.Error("anthropic_json_error", "error", ev.Err)
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusInternalServerError)
+			protocol.WriteJSON(rw, map[string]any{
+				"type": "error",
+				"error": map[string]any{
+					"type":    "api_error",
+					"message": "internal server error",
+				},
+			})
+			return
 		}
 	}
 
