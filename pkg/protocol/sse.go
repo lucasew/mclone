@@ -17,7 +17,7 @@ var bufPool = sync.Pool{
 	},
 }
 
-func WriteSSE[T interface{}](w http.ResponseWriter, event string, data T) {
+func WriteSSE[T any](w http.ResponseWriter, event string, data T) {
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer bufPool.Put(buf)
@@ -41,7 +41,7 @@ func WriteSSE[T interface{}](w http.ResponseWriter, event string, data T) {
 	}
 }
 
-func WriteSSEData[T interface{}](w http.ResponseWriter, data T) {
+func WriteSSEData[T any](w http.ResponseWriter, data T) {
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer bufPool.Put(buf)
@@ -76,7 +76,7 @@ func SetStreamHeaders(w http.ResponseWriter) {
 	w.Header().Set("Connection", "keep-alive")
 }
 
-func WriteJSON[T interface{}](w http.ResponseWriter, data T) {
+func WriteJSON[T any](w http.ResponseWriter, data T) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		monitor.ReportError(context.Background(), err, "action", "WriteJSON_Encode")
 	}
