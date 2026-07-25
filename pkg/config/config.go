@@ -44,6 +44,10 @@ type Config struct {
 	Tools   map[string]ToolConfig   `toml:"tools"`
 }
 
+// configFileMode is owner read/write only. Config files hold API keys, OAuth
+// tokens, and similar secrets in remote options.
+const configFileMode = 0o600
+
 type ConfigLoader struct {
 	Location string
 }
@@ -65,12 +69,29 @@ func (c *ConfigLoader) GetLocation() (string, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	f, err := os.Create(c.Location)
+	// Create with 0600 so a brand-new secret-bearing conf is never group/world readable.
+	// os.Create uses 0666 before umask (typically 0644).
+	f, err := os.OpenFile(c.Location, os.O_RDWR|os.O_CREATE|os.O_EXCL, configFileMode)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	if err := f.Close(); err != nil {
+		return "", err
+	}
 	return c.Location, nil
+}
+
+// tightenConfigPerms sets the config path to owner-only when group/other bits are set.
+// WriteFile does not change mode on truncate of an existing file.
+func tightenConfigPerms(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0o077 == 0 {
+		return nil
+	}
+	return os.Chmod(path, configFileMode)
 }
 
 func (c *ConfigLoader) Load() (*Config, error) {
@@ -86,6 +107,11 @@ func (c *ConfigLoader) Load() (*Config, error) {
 				Tools:   make(map[string]ToolConfig),
 			}, nil
 		}
+		return nil, err
+	}
+
+	// Retroactively lock down world/group-readable configs that already hold secrets.
+	if err := tightenConfigPerms(configFile); err != nil {
 		return nil, err
 	}
 
@@ -105,5 +131,9 @@ func (c *ConfigLoader) Save(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configFile, data, 0644)
+	if err := os.WriteFile(configFile, data, configFileMode); err != nil {
+		return err
+	}
+	// WriteFile only applies mode on create; always enforce owner-only after write.
+	return tightenConfigPerms(configFile)
 }
