@@ -98,6 +98,6 @@ type ToolCall struct {
 }
 
 // ParseArguments unmarshals the arguments JSON into the target.
-func ParseArguments[T interface{}](tc ToolCall, target *T) error {
+func ParseArguments[T any](tc ToolCall, target *T) error {
 	return json.Unmarshal(tc.Arguments, target)
 }
