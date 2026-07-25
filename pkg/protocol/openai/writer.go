@@ -61,6 +61,15 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 			})
 		case message.ResponseError:
 			slog.Error("openai_stream_error", "error", ev.Err)
+			// Generic message only — never leak backend err.Error() to clients.
+			protocol.WriteSSEData(rw, map[string]any{
+				"error": map[string]any{
+					"message": "internal server error",
+					"type":    "server_error",
+				},
+			})
+			protocol.WriteSSERaw(rw, "[DONE]")
+			return
 		}
 	}
 	protocol.WriteSSERaw(rw, "[DONE]")
@@ -86,6 +95,15 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, mode
 			}
 		case message.ResponseError:
 			slog.Error("openai_json_error", "error", ev.Err)
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusInternalServerError)
+			protocol.WriteJSON(rw, map[string]any{
+				"error": map[string]any{
+					"message": "internal server error",
+					"type":    "server_error",
+				},
+			})
+			return
 		}
 	}
 
