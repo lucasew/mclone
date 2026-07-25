@@ -18,7 +18,10 @@ import (
 	"golang.org/x/net/html"
 )
 
-const defaultTimeout = 30 * time.Second
+const (
+	defaultTimeout     = 30 * time.Second
+	defaultMaxBodySize = int64(2 * 1024 * 1024) // 2 MiB HTML search page
+)
 
 var (
 	urlRegex         = regexp.MustCompile(`uddg=([^&"]*)`)
@@ -83,7 +86,9 @@ func search(ctx context.Context, query string, maxResults int) ([]searchResult, 
 		return nil, fmt.Errorf("DDG returned status %d", resp.StatusCode)
 	}
 
-	return parseResults(resp.Body, maxResults)
+	// Cap HTML size so a large or hostile response cannot exhaust memory.
+	body := io.LimitReader(resp.Body, defaultMaxBodySize)
+	return parseResults(body, maxResults)
 }
 
 type searchResult struct {
