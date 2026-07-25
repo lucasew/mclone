@@ -390,20 +390,6 @@ func summarizeSingleLine(text string, width int) string {
 	return string(runes[:width-1]) + "…"
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func renderMarkdownText(text string, width int) string {
 	if text == "" {
 		return ""
