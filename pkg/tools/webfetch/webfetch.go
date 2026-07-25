@@ -85,38 +85,62 @@ func newHTTPClient(timeout time.Duration, maxRedirects int) *http.Client {
 	}
 }
 
+// Special-use IPv4 ranges that Go's net.IP.IsPrivate does not cover, but that
+// must not be reachable via SSRF (CGNAT, benchmarking, documentation).
+var forbiddenIPv4Nets = []net.IPNet{
+	// RFC 6598 — Shared Address Space (carrier-grade NAT / some VPN overlays)
+	{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)},
+	// RFC 2544 — Network Interconnect Device Benchmark Testing
+	{IP: net.IPv4(198, 18, 0, 0), Mask: net.CIDRMask(15, 32)},
+	// RFC 5737 — documentation (TEST-NET-1/2/3)
+	{IP: net.IPv4(192, 0, 2, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(198, 51, 100, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(203, 0, 113, 0), Mask: net.CIDRMask(24, 32)},
+	// RFC 6890 — IETF protocol assignments
+	{IP: net.IPv4(192, 0, 0, 0), Mask: net.CIDRMask(24, 32)},
+}
+
 func newSafeDialer(timeout time.Duration) *net.Dialer {
 	return &net.Dialer{
 		Timeout:   timeout,
 		KeepAlive: timeout,
-		Control: func(network, address string, c syscall.RawConn) error {
+		// Control sees the resolved dial target as IP:port after DNS. Parse that
+		// IP fail-closed (no second LookupIP that could diverge / rebind).
+		Control: func(_, address string, _ syscall.RawConn) error {
 			host, _, err := net.SplitHostPort(address)
 			if err != nil {
 				return err
 			}
-			ips, err := net.LookupIP(host)
-			if err != nil {
-				return err
-			}
-			for _, ip := range ips {
-				if isBlockedIP(ip) {
-					return errors.New("refusing to connect to private network address")
-				}
+			ip := net.ParseIP(host)
+			if isBlockedIP(ip) {
+				return errors.New("refusing to connect to private network address")
 			}
 			return nil
 		},
 	}
 }
 
-// isBlockedIP reports whether dialing ip would allow SSRF into local or
-// non-routable space. Matches Go's net.IP helpers used by the dial Control.
+// isBlockedIP reports whether dialing ip would allow SSRF into local,
+// private, or special-use space (including CGNAT 100.64.0.0/10).
 func isBlockedIP(ip net.IP) bool {
-	return ip.IsPrivate() ||
-		ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() ||
-		ip.IsUnspecified()
+	if ip == nil {
+		return true
+	}
+	// Normalize IPv4-mapped IPv6 so To4-based nets match.
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
+	// IsGlobalUnicast is false for loopback, link-local, multicast, unspecified.
+	// It is still true for RFC1918/ULA and CGNAT, so those need extra checks.
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return true
+	}
+	for i := range forbiddenIPv4Nets {
+		if forbiddenIPv4Nets[i].Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseFetchURL requires an absolute http(s) URL with a host. Non-HTTP schemes

@@ -66,6 +66,12 @@ func TestIsBlockedIP(t *testing.T) {
 		"::",
 		"224.0.0.1",
 		"ff02::1",
+		"100.64.0.1",      // CGNAT (not IsPrivate in Go)
+		"100.127.255.254", // CGNAT high end
+		"198.18.0.1",      // benchmarking
+		"192.0.2.1",       // TEST-NET-1
+		"198.51.100.1",    // TEST-NET-2
+		"203.0.113.1",     // TEST-NET-3
 	}
 	for _, s := range blocked {
 		ip := net.ParseIP(s)
@@ -186,4 +192,21 @@ func TestFetchAndParseOKPassesStatusGate(t *testing.T) {
 		t.Fatalf("status gate should allow 200, got %v", err)
 	}
 	// err may be a parse/readability failure; that is fine for this test.
+}
+
+func TestSafeDialerBlocksCGNAT(t *testing.T) {
+	t.Parallel()
+	// 100.64.0.0/10 is not IsPrivate in Go; the dialer must still refuse it.
+	client := newHTTPClient(2*time.Second, 1)
+	req, err := http.NewRequest("GET", "http://100.64.0.1:80/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Do(req)
+	if err == nil {
+		t.Fatal("expected error dialing CGNAT 100.64.0.1, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing to connect to private network address") {
+		t.Fatalf("error %q should mention refusing private network", err)
+	}
 }
