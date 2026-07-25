@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -69,7 +70,7 @@ func (s *Server) serveResponsesRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := json.NewDecoder(bodyReader).Decode(&req); err != nil {
-		serveResponsesError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		serveResponsesError(w, http.StatusBadRequest, "invalid_request_error", "invalid request body")
 		return
 	}
 
@@ -94,7 +95,8 @@ func (s *Server) serveResponsesRequest(w http.ResponseWriter, r *http.Request) {
 		if serveRateLimitError(w, responsesAPIWriter{}, err) {
 			return
 		}
-		serveResponsesError(w, http.StatusInternalServerError, "server_error", err.Error())
+		slog.Error("responses provider error", "err", err)
+		serveResponsesError(w, http.StatusInternalServerError, "server_error", "internal server error")
 		return
 	}
 
@@ -142,7 +144,8 @@ func (s *Server) serveResponsesJSON(w http.ResponseWriter, ch <-chan message.Eve
 				Status:    "completed",
 			})
 		case message.ResponseError:
-			serveResponsesError(w, http.StatusInternalServerError, "server_error", v.Err.Error())
+			slog.Error("responses stream error", "err", v.Err)
+			serveResponsesError(w, http.StatusInternalServerError, "server_error", "internal server error")
 			return
 		}
 	}
