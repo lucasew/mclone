@@ -1,7 +1,6 @@
 package anthropic
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -53,7 +52,7 @@ func TestListSuccess(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	p := &AnthropicProvider{BaseURL: srv.URL, APIKey: "test-key"}
-	models, err := p.List(context.Background())
+	models, err := p.List(t.Context())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -77,7 +76,7 @@ func TestListNon2xx(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	p := &AnthropicProvider{BaseURL: srv.URL, APIKey: "bad"}
-	_, err := p.List(context.Background())
+	_, err := p.List(t.Context())
 	if err == nil {
 		t.Fatal("List: want error for 401")
 	}
@@ -99,7 +98,7 @@ func TestListInvalidJSON(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	p := &AnthropicProvider{BaseURL: srv.URL, APIKey: "test-key"}
-	_, err := p.List(context.Background())
+	_, err := p.List(t.Context())
 	if err == nil {
 		t.Fatal("List: want decode error, got nil")
 	}
