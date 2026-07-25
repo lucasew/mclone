@@ -55,7 +55,7 @@ func (s *Server) serveChatRequest(w http.ResponseWriter, r *http.Request, writer
 		return
 	}
 	if err := json.NewDecoder(bodyReader).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
