@@ -17,28 +17,29 @@ var lsCmd = &cobra.Command{
 	Short: "List exported models, or models in a specific remote",
 	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		resolve := remote.NewResolver(config.LoaderFrom(cmd.Context()))
+		ctx := cmd.Context()
+		resolve := remote.NewResolver(config.LoaderFrom(ctx))
 
 		if len(args) == 0 {
-			listModels(resolve.Exported)
+			listModels(ctx, resolve.Exported)
 			return
 		}
 
 		remoteName := strings.TrimSuffix(args[0], ":")
-		listModels(func() (remote.Provider, error) {
+		listModels(ctx, func() (remote.Provider, error) {
 			return resolve.Provider(remoteName)
 		})
 	},
 }
 
-func listModels(resolveProvider func() (remote.Provider, error)) {
+func listModels(ctx context.Context, resolveProvider func() (remote.Provider, error)) {
 	p, err := resolveProvider()
 	if err != nil {
 		fmt.Printf("Error creating provider: %v\n", err)
 		return
 	}
 
-	models, err := p.List(context.Background())
+	models, err := p.List(ctx)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
