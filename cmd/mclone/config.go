@@ -260,7 +260,7 @@ func interactiveConfig(ctx context.Context) {
 						fmt.Printf("Failed to create provider: %v\n", err)
 					} else {
 						// Trigger List to force auth
-						_, err := prov.List(context.Background())
+						_, err := prov.List(ctx)
 						if err == nil {
 							fmt.Println("Authentication successful! Token saved.")
 						} else {
@@ -308,7 +308,7 @@ var configAddCmd = &cobra.Command{
 				fmt.Printf("Failed to create provider: %v\n", err)
 				return
 			}
-			if _, err := prov.List(context.Background()); err != nil {
+			if _, err := prov.List(cmd.Context()); err != nil {
 				fmt.Printf("Authentication failed: %v\n", err)
 				return
 			}
