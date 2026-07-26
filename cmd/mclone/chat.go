@@ -298,7 +298,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 		}
 
 		choice := resp.Choices[0]
-		logLangchainChoice(choice)
+		logLangchainChoice(ctx, choice)
 		streamedMu.Lock()
 		finalContent := streamed.String()
 		streamedMu.Unlock()
@@ -346,7 +346,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 		})
 
 		for _, call := range choice.ToolCalls {
-			logLangchainToolCall(call)
+			logLangchainToolCall(ctx, call)
 			toolLine := chatui.Line{}
 			if call.FunctionCall != nil {
 				toolLine = chatui.Line{
@@ -362,7 +362,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 			if err != nil {
 				return err
 			}
-			logLangchainToolResult(call, result)
+			logLangchainToolResult(ctx, call, result)
 			if call.FunctionCall != nil {
 				toolLine.Status = toolCallStatus(result)
 				emit(toolLine)
@@ -448,8 +448,8 @@ func logLangchainMessages(messages []llms.MessageContent) {
 	slog.Debug("langchain_messages", "payload", string(payload))
 }
 
-func logLangchainChoice(choice *llms.ContentChoice) {
-	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+func logLangchainChoice(ctx context.Context, choice *llms.ContentChoice) {
+	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
 		return
 	}
 	if choice == nil {
@@ -462,8 +462,8 @@ func logLangchainChoice(choice *llms.ContentChoice) {
 	)
 }
 
-func logLangchainToolCall(call llms.ToolCall) {
-	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+func logLangchainToolCall(ctx context.Context, call llms.ToolCall) {
+	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
 		return
 	}
 	if call.FunctionCall == nil {
@@ -476,8 +476,8 @@ func logLangchainToolCall(call llms.ToolCall) {
 	)
 }
 
-func logLangchainToolResult(call llms.ToolCall, result string) {
-	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+func logLangchainToolResult(ctx context.Context, call llms.ToolCall, result string) {
+	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
 		return
 	}
 	name := ""
