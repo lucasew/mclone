@@ -95,17 +95,11 @@ func init() {
 				continue
 			}
 
-			parts := strings.SplitN(target, ":", 2)
-			remoteName := parts[0]
+			remoteName, backendModel, _ := strings.Cut(target, ":")
 
 			prov, err := resolve.Provider(remoteName)
 			if err != nil {
 				return nil, fmt.Errorf("route %q: failed to resolve remote %q: %w", model, remoteName, err)
-			}
-
-			backendModel := ""
-			if len(parts) == 2 {
-				backendModel = parts[1]
 			}
 
 			routes[model] = modelRoute{provider: prov, modelName: backendModel}
