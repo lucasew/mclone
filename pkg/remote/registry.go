@@ -467,7 +467,7 @@ func (p *exportedProvider) sortedModels() []Model {
 }
 
 // DecodeOptions decodes input into output using mapstructure with weak typing.
-func DecodeOptions(input interface{}, output interface{}) error {
+func DecodeOptions(input any, output any) error {
 	config := &mapstructure.DecoderConfig{
 		Metadata:         nil,
 		Result:           output,

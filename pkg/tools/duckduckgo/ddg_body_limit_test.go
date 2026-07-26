@@ -1,7 +1,6 @@
 package duckduckgo
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +38,6 @@ func TestSearchLimitsResponseBody(t *testing.T) {
 
 	// Also ensure search() uses LimitReader: monkey via custom client is hard
 	// because URL is fixed. Smoke-test search against real DDG is integration-only.
-	_ = context.Background()
+	_ = t.Context()
 	_ = srv
 }

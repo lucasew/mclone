@@ -63,7 +63,7 @@ func TestToolboxPreservesToolCallFinishReasonForPassthroughCalls(t *testing.T) {
 		maxLoops: 1,
 	}
 
-	ch, err := provider.Chat(context.Background(), message.Request{Model: "demo"})
+	ch, err := provider.Chat(t.Context(), message.Request{Model: "demo"})
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
@@ -108,7 +108,7 @@ func TestToolboxMaxLoopsReturnsResponseError(t *testing.T) {
 		maxLoops: 2,
 	}
 
-	ch, err := provider.Chat(context.Background(), message.Request{Model: "demo"})
+	ch, err := provider.Chat(t.Context(), message.Request{Model: "demo"})
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}

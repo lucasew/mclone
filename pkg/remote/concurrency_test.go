@@ -82,7 +82,7 @@ max_concurrent = 1
 		t.Fatalf("expected blockingProvider, got %T", cp.inner)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	started := make(chan struct{}, 2)

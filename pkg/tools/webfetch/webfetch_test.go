@@ -1,7 +1,6 @@
 package webfetch
 
 import (
-	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -107,7 +106,7 @@ func TestFetchAndParseRejectsNonHTTPScheme(t *testing.T) {
 		maxBodySize: defaultMaxBodySize,
 		toolName:    "WebFetch",
 	}
-	_, err := s.fetchAndParse(context.Background(), "file:///etc/passwd", "md")
+	_, err := s.fetchAndParse(t.Context(), "file:///etc/passwd", "md")
 	if err == nil {
 		t.Fatal("fetchAndParse: want error for file:// URL, got nil")
 	}
@@ -136,7 +135,7 @@ func TestFetchAndParseNonOKStatus(t *testing.T) {
 		maxBodySize: defaultMaxBodySize,
 		toolName:    "WebFetch",
 	}
-	_, err := s.fetchAndParse(context.Background(), srv.URL+"/missing", "md")
+	_, err := s.fetchAndParse(t.Context(), srv.URL+"/missing", "md")
 	if err == nil {
 		t.Fatal("fetchAndParse: want error for non-2xx status, got nil")
 	}
@@ -162,7 +161,7 @@ func TestFetchAndParseServerError(t *testing.T) {
 		maxBodySize: defaultMaxBodySize,
 		toolName:    "WebFetch",
 	}
-	_, err := s.fetchAndParse(context.Background(), srv.URL+"/", "html")
+	_, err := s.fetchAndParse(t.Context(), srv.URL+"/", "html")
 	if err == nil {
 		t.Fatal("fetchAndParse: want error for 500, got nil")
 	}
@@ -187,7 +186,7 @@ func TestFetchAndParseOKPassesStatusGate(t *testing.T) {
 		maxBodySize: defaultMaxBodySize,
 		toolName:    "WebFetch",
 	}
-	_, err := s.fetchAndParse(context.Background(), srv.URL+"/", "html")
+	_, err := s.fetchAndParse(t.Context(), srv.URL+"/", "html")
 	if err != nil && strings.Contains(err.Error(), "status") {
 		t.Fatalf("status gate should allow 200, got %v", err)
 	}

@@ -233,7 +233,7 @@ func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan messag
 
 		bodyBytes, err := json.Marshal(wrappedBody)
 		if err != nil {
-			out <- message.ResponseError{Err: fmt.Errorf("failed to marshal request: %w", err)}
+			out <- message.ResponseError{Err: fmt.Errorf("marshal request: %w", err)}
 			return
 		}
 
@@ -1400,7 +1400,7 @@ func (p *Provider) loadToken() (*TokenData, error) {
 	}
 	var token TokenData
 	if err := json.Unmarshal([]byte(tokenJSON), &token); err != nil {
-		return nil, fmt.Errorf("failed to parse token from config: %w", err)
+		return nil, fmt.Errorf("parse token from config: %w", err)
 	}
 	p.token = &token
 	return &token, nil

@@ -114,7 +114,7 @@ func TestExportedProviderIncludesImplicitBalanceGroup(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			listed, err := prov.List(context.Background())
+			listed, err := prov.List(t.Context())
 			if err != nil {
 				return nil, err
 			}
@@ -137,7 +137,7 @@ func TestExportedProviderIncludesImplicitBalanceGroup(t *testing.T) {
 		t.Fatalf("Exported() error = %v", err)
 	}
 
-	models, err := provider.List(context.Background())
+	models, err := provider.List(t.Context())
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}

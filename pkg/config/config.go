@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/pelletier/go-toml/v2"
+	"io/fs"
 )
 
 type contextKey struct{}
@@ -101,7 +102,7 @@ func (c *ConfigLoader) Load() (*Config, error) {
 	}
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return &Config{
 				Remotes: make(map[string]RemoteConfig),
 				Tools:   make(map[string]ToolConfig),

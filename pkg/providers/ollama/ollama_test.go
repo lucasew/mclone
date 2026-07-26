@@ -1,7 +1,6 @@
 package ollama
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,7 +23,7 @@ func TestListSuccess(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	p := &OllamaProvider{BaseURL: srv.URL}
-	models, err := p.List(context.Background())
+	models, err := p.List(t.Context())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -49,7 +48,7 @@ func TestListNonOKStatus(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	p := &OllamaProvider{BaseURL: srv.URL}
-	_, err := p.List(context.Background())
+	_, err := p.List(t.Context())
 	if err == nil {
 		t.Fatal("List: want error for non-200 status, got nil")
 	}
@@ -71,7 +70,7 @@ func TestListInvalidJSON(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	p := &OllamaProvider{BaseURL: srv.URL}
-	_, err := p.List(context.Background())
+	_, err := p.List(t.Context())
 	if err == nil {
 		t.Fatal("List: want decode error, got nil")
 	}
@@ -85,7 +84,7 @@ func TestListRequestError(t *testing.T) {
 
 	// Control characters in the URL make NewRequestWithContext fail.
 	p := &OllamaProvider{BaseURL: "http://example.com/\x00"}
-	_, err := p.List(context.Background())
+	_, err := p.List(t.Context())
 	if err == nil {
 		t.Fatal("List: want request construction error, got nil")
 	}

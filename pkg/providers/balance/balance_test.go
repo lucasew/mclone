@@ -56,7 +56,7 @@ func TestBalanceProviderFailoverChainsAcrossMultipleBackends(t *testing.T) {
 		},
 	}
 
-	ch, err := provider.Chat(context.Background(), message.Request{
+	ch, err := provider.Chat(t.Context(), message.Request{
 		Model: "demo",
 		Turns: []message.Turn{message.TextTurn(message.RoleSystem, "same system")},
 	})
@@ -92,7 +92,7 @@ func TestListAllBackendsFail(t *testing.T) {
 		},
 	}
 
-	models, err := provider.List(context.Background())
+	models, err := provider.List(t.Context())
 	if err == nil {
 		t.Fatalf("List() error = nil, want all-backends failure; models=%v", models)
 	}
@@ -117,7 +117,7 @@ func TestListPartialBackendFailure(t *testing.T) {
 		},
 	}
 
-	models, err := provider.List(context.Background())
+	models, err := provider.List(t.Context())
 	if err != nil {
 		t.Fatalf("List() error = %v, want nil when any backend succeeds", err)
 	}
