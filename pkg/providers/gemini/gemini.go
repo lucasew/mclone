@@ -18,6 +18,9 @@ import (
 	"google.golang.org/genai"
 )
 
+// rootContext backs exported helpers that have no request context.
+var rootContext = context.Background()
+
 // listHTTPClient bounds List so a hung models endpoint cannot block forever.
 // genai.NewClient defaults to &http.Client{} with no Timeout when HTTPClient is nil.
 var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
@@ -82,7 +85,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 		toolDefinitionCache.Store(t.Name, t)
 	}
 
-	contents, systemInstruction := ToGeminiContents(req.Turns)
+	contents, systemInstruction := toGeminiContents(ctx, req.Turns)
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
 	}
@@ -236,7 +239,13 @@ func (p *GeminiProvider) client(ctx context.Context, httpClient *http.Client) (*
 	})
 }
 
+// ToGeminiContents converts message turns for the Gemini API without a request
+// context. Prefer toGeminiContents when a cancellable ctx is available.
 func ToGeminiContents(messages []message.Turn) ([]*genai.Content, *genai.Content) {
+	return toGeminiContents(rootContext, messages)
+}
+
+func toGeminiContents(ctx context.Context, messages []message.Turn) ([]*genai.Content, *genai.Content) {
 	var system *genai.Content
 	var rawTurns []*genai.Content
 
@@ -298,7 +307,7 @@ func ToGeminiContents(messages []message.Turn) ([]*genai.Content, *genai.Content
 						if err2 := json.Unmarshal(v.Arguments, &fallback); err2 == nil {
 							sdkArgs = map[string]interface{}{"input": fallback}
 						} else {
-							monitor.ReportError(context.Background(), err, "action", "gemini_arg_unmarshal_error")
+							monitor.ReportError(ctx, err, "action", "gemini_arg_unmarshal_error")
 						}
 					}
 				}
