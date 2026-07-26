@@ -50,7 +50,7 @@ func TestExportedProviderListsExportedRemotes(t *testing.T) {
 		t.Fatalf("Exported() error = %v", err)
 	}
 
-	models, err := provider.List(context.Background())
+	models, err := provider.List(t.Context())
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -90,7 +90,7 @@ func TestExportedProviderDetectsConflicts(t *testing.T) {
 		t.Fatalf("Exported() error = %v", err)
 	}
 
-	if _, err := provider.List(context.Background()); err == nil {
+	if _, err := provider.List(t.Context()); err == nil {
 		t.Fatal("expected conflict error, got nil")
 	}
 }
