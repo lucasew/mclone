@@ -261,7 +261,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 		},
 	}
 	for i := 0; i < maxIterations; i++ {
-		logLangchainMessages(messages)
+		logLangchainMessages(ctx, messages)
 		assistantID := chatui.PendingAssistantID
 		var streamed strings.Builder
 		var streamedMu sync.Mutex
@@ -439,7 +439,10 @@ func sanitizeAssistantContent(text string) string {
 	return text
 }
 
-func logLangchainMessages(messages []llms.MessageContent) {
+func logLangchainMessages(ctx context.Context, messages []llms.MessageContent) {
+	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
+		return
+	}
 	payload, err := json.MarshalIndent(messages, "", "  ")
 	if err != nil {
 		slog.Warn("langchain_message_log_failed", "error", err)
