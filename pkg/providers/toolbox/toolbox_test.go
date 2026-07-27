@@ -134,3 +134,49 @@ func TestToolboxMaxLoopsReturnsResponseError(t *testing.T) {
 		t.Fatalf("error = %q, want message mentioning max tool loops", finalErr)
 	}
 }
+
+type ctxCaptureSource struct {
+	got context.Context
+}
+
+func (s *ctxCaptureSource) Tools(ctx context.Context) ([]tools.Tool, error) {
+	s.got = ctx
+	return []tools.Tool{{
+		Definition: message.ToolDefinition{
+			Type: "function",
+			Name: "ctx_probe",
+		},
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	}}, nil
+}
+
+func TestToolboxLoadToolsUsesCallerContext(t *testing.T) {
+	src := &ctxCaptureSource{}
+	type ctxKey struct{}
+	marker := context.WithValue(t.Context(), ctxKey{}, "toolbox-ctx")
+
+	provider := &ToolboxProvider{
+		base:     &passthroughProvider{},
+		sources:  []toolSourceRef{{name: "probe", source: src}},
+		maxLoops: 1,
+	}
+
+	ch, err := provider.Chat(marker, message.Request{Model: "demo"})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	for range ch {
+	}
+
+	if src.got == nil {
+		t.Fatal("Tools() was not called")
+	}
+	if src.got.Value(ctxKey{}) != "toolbox-ctx" {
+		t.Fatalf("Tools() context missing marker value: %#v", src.got)
+	}
+	if _, ok := provider.toolMap["ctx_probe"]; !ok {
+		t.Fatal("expected ctx_probe in toolMap after load")
+	}
+}

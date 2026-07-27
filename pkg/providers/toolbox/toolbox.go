@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
@@ -17,20 +18,85 @@ type ToolboxConfig struct {
 	MaxLoops int      `mapstructure:"max_loops"`
 }
 
+type toolSourceRef struct {
+	name   string
+	source tools.ToolSource
+}
+
 type ToolboxProvider struct {
 	base     remote.Provider
 	tools    []tools.Tool
 	toolMap  map[string]tools.Tool
 	maxLoops int
+
+	// sources are resolved at construction; definitions are loaded on first
+	// List/Chat with that call's context (factory has no request context).
+	sources     []toolSourceRef
+	toolsMu     sync.Mutex
+	toolsLoaded bool
+	toolsErr    error
 }
 
 func (p *ToolboxProvider) Name() string { return "toolbox" }
 
+// loadTools materializes tool definitions from configured sources using ctx.
+// Safe to call from List and Chat; no-op when tools were pre-set (tests) or
+// already loaded.
+func (p *ToolboxProvider) loadTools(ctx context.Context) error {
+	p.toolsMu.Lock()
+	defer p.toolsMu.Unlock()
+	if p.toolsLoaded {
+		return p.toolsErr
+	}
+	// Pre-populated tools (unit tests / callers that set tools directly).
+	if len(p.sources) == 0 {
+		if p.toolMap == nil {
+			p.toolMap = make(map[string]tools.Tool)
+		}
+		p.toolsLoaded = true
+		return nil
+	}
+
+	var allTools []tools.Tool
+	toolMap := make(map[string]tools.Tool)
+	for _, ref := range p.sources {
+		ts, err := ref.source.Tools(ctx)
+		if err != nil {
+			p.toolsErr = fmt.Errorf("toolbox: failed to get tools from %q: %w", ref.name, err)
+			p.toolsLoaded = true
+			return p.toolsErr
+		}
+		for _, t := range ts {
+			key := strings.ToLower(t.Definition.Name)
+			if existing, ok := toolMap[key]; ok {
+				slog.Warn("toolbox_tool_collision",
+					"tool", t.Definition.Name,
+					"source", ref.name,
+					"overrides", existing.Definition.Name,
+				)
+			}
+			allTools = append(allTools, t)
+			toolMap[key] = t
+		}
+	}
+	p.tools = allTools
+	p.toolMap = toolMap
+	p.toolsLoaded = true
+	return nil
+}
+
 func (p *ToolboxProvider) List(ctx context.Context) ([]remote.Model, error) {
+	if err := p.loadTools(ctx); err != nil {
+		return nil, err
+	}
 	return p.base.List(ctx)
 }
 
 func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
+	if err := p.loadTools(ctx); err != nil {
+		return nil, err
+	}
+
 	// Inject tool definitions, dedup by name (ours win)
 	ownNames := make(map[string]bool)
 	for _, t := range p.tools {
@@ -171,9 +237,7 @@ func init() {
 			return nil, fmt.Errorf("toolbox: failed to resolve provider %q: %w", cfg.Provider, err)
 		}
 
-		var allTools []tools.Tool
-		toolMap := make(map[string]tools.Tool)
-
+		var sources []toolSourceRef
 		for _, tn := range cfg.Tools {
 			tn = strings.TrimSpace(tn)
 			if tn == "" {
@@ -184,28 +248,12 @@ func init() {
 			if err != nil {
 				return nil, fmt.Errorf("toolbox: failed to resolve tool source %q: %w", tn, err)
 			}
-			ts, err := source.Tools(context.Background())
-			if err != nil {
-				return nil, fmt.Errorf("toolbox: failed to get tools from %q: %w", tn, err)
-			}
-			for _, t := range ts {
-				key := strings.ToLower(t.Definition.Name)
-				if existing, ok := toolMap[key]; ok {
-					slog.Warn("toolbox_tool_collision",
-						"tool", t.Definition.Name,
-						"source", tn,
-						"overrides", existing.Definition.Name,
-					)
-				}
-				allTools = append(allTools, t)
-				toolMap[key] = t
-			}
+			sources = append(sources, toolSourceRef{name: tn, source: source})
 		}
 
 		return &ToolboxProvider{
 			base:     base,
-			tools:    allTools,
-			toolMap:  toolMap,
+			sources:  sources,
 			maxLoops: cfg.MaxLoops,
 		}, nil
 	})
