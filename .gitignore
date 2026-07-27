@@ -1,13 +1,13 @@
 # Binaries
-mclone
-mclone.exe
+/mclone
+/mclone.exe
 
 # Dependencies
-vendor/
+/vendor/
 
 # Environment and secrets
-.env
-.env.local
+/.env
+/.env.local
 
 # Build artifacts
 *.out
