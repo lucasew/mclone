@@ -1,7 +1,6 @@
 package server
 
 import (
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,7 +13,7 @@ import (
 func (s *Server) serveModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.cfg.Provider.List(r.Context())
 	if err != nil {
-		slog.Error("list models failed", "err", err)
+		monitor.ReportError(r.Context(), err, "msg", "list models failed")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}

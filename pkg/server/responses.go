@@ -1,8 +1,8 @@
 package server
 
 import (
+	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/protocol"
 )
 
@@ -95,7 +96,7 @@ func (s *Server) serveResponsesRequest(w http.ResponseWriter, r *http.Request) {
 		if serveRateLimitError(w, responsesAPIWriter{}, err) {
 			return
 		}
-		slog.Error("responses provider error", "err", err)
+		monitor.ReportError(r.Context(), err, "msg", "responses provider error")
 		serveResponsesError(w, http.StatusInternalServerError, "server_error", "internal server error")
 		return
 	}
@@ -144,7 +145,7 @@ func (s *Server) serveResponsesJSON(w http.ResponseWriter, ch <-chan message.Eve
 				Status:    "completed",
 			})
 		case message.ResponseError:
-			slog.Error("responses stream error", "err", v.Err)
+			monitor.ReportError(context.Background(), v.Err, "msg", "responses stream error")
 			serveResponsesError(w, http.StatusInternalServerError, "server_error", "internal server error")
 			return
 		}
