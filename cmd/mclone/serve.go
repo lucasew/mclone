@@ -14,10 +14,12 @@ import (
 )
 
 var serveCmd = &cobra.Command{
-	Use:   "serve [remote]",
-	Short: "Serve a remote via OpenAI or Anthropic compatible API",
-	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	Use:           "serve [remote]",
+	Short:         "Serve a remote via OpenAI or Anthropic compatible API",
+	Args:          cobra.MaximumNArgs(1),
+	SilenceErrors: true, // main prints the returned error once
+	SilenceUsage:  true, // operational failures are not flag misuse
+	RunE: func(cmd *cobra.Command, args []string) error {
 		remoteName := ""
 		if len(args) > 0 {
 			remoteName = strings.TrimSuffix(args[0], ":")
@@ -44,7 +46,7 @@ var serveCmd = &cobra.Command{
 		conf, err := loader.Load()
 		if err != nil {
 			monitor.ReportError(cmd.Context(), err, "action", "load_config")
-			return
+			return err
 		}
 
 		resolve := remote.NewResolver(loader)
@@ -53,13 +55,13 @@ var serveCmd = &cobra.Command{
 			provider, err = resolve.Exported()
 			if err != nil {
 				monitor.ReportError(cmd.Context(), err, "action", "create_exported_provider")
-				return
+				return err
 			}
 		} else {
 			provider, err = resolve.Provider(remoteName)
 			if err != nil {
 				monitor.ReportError(cmd.Context(), err, "action", "create_provider")
-				return
+				return err
 			}
 		}
 
@@ -77,7 +79,9 @@ var serveCmd = &cobra.Command{
 		srv := server.New(cfg)
 		if err := srv.ListenAndServe(fmt.Sprintf(":%d", port)); err != nil {
 			monitor.ReportError(cmd.Context(), err, "action", "server_listen")
+			return err
 		}
+		return nil
 	},
 }
 
