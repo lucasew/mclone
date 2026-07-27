@@ -13,36 +13,35 @@ import (
 )
 
 var lsCmd = &cobra.Command{
-	Use:   "ls [remote]",
-	Short: "List exported models, or models in a specific remote",
-	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	Use:           "ls [remote]",
+	Short:         "List exported models, or models in a specific remote",
+	Args:          cobra.MaximumNArgs(1),
+	SilenceErrors: true, // main prints the returned error once
+	SilenceUsage:  true, // operational failures are not flag misuse
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		resolve := remote.NewResolver(config.LoaderFrom(ctx))
 
 		if len(args) == 0 {
-			listModels(ctx, resolve.Exported)
-			return
+			return listModels(ctx, resolve.Exported)
 		}
 
 		remoteName := strings.TrimSuffix(args[0], ":")
-		listModels(ctx, func() (remote.Provider, error) {
+		return listModels(ctx, func() (remote.Provider, error) {
 			return resolve.Provider(remoteName)
 		})
 	},
 }
 
-func listModels(ctx context.Context, resolveProvider func() (remote.Provider, error)) {
+func listModels(ctx context.Context, resolveProvider func() (remote.Provider, error)) error {
 	p, err := resolveProvider()
 	if err != nil {
-		fmt.Printf("Error creating provider: %v\n", err)
-		return
+		return fmt.Errorf("creating provider: %w", err)
 	}
 
 	models, err := p.List(ctx)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
+		return fmt.Errorf("listing models: %w", err)
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
@@ -50,7 +49,10 @@ func listModels(ctx context.Context, resolveProvider func() (remote.Provider, er
 	for _, m := range models {
 		fmt.Fprintf(w, "%s\t%s\n", m.Slug, m.Name)
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("writing model list: %w", err)
+	}
+	return nil
 }
 
 func init() {
