@@ -61,7 +61,7 @@ var serveCmd = &cobra.Command{
 		resolve := remote.NewResolver(loader)
 		var provider remote.Provider
 		if remoteName == "" {
-			provider, err = resolve.Exported()
+			provider, err = resolve.Exported(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("create exported provider: %w", err)
 			}

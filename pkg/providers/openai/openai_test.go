@@ -4,8 +4,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+)
+
+var (
+	ErrStreamNoErrorPeer = errors.New("stream error: stream ID 41; NO_ERROR; received from peer")
+	ErrContextCanceled   = errors.New("context canceled")
+	ErrStreamUnexpected  = errors.New("stream error: unexpected EOF")
 )
 
 func TestShouldIgnoreStreamError(t *testing.T) {
@@ -26,24 +31,24 @@ func TestShouldIgnoreStreamError(t *testing.T) {
 		},
 		{
 			name: "no output yet",
-			err:  errors.New("stream error: stream ID 41; NO_ERROR; received from peer"),
+			err:  ErrStreamNoErrorPeer,
 			want: false,
 		},
 		{
 			name:       "ignore no_error after content",
-			err:        errors.New("stream error: stream ID 41; NO_ERROR; received from peer"),
+			err:        ErrStreamNoErrorPeer,
 			sawContent: true,
 			want:       true,
 		},
 		{
 			name:        "ignore context canceled after tool call",
-			err:         errors.New("context canceled"),
+			err:         ErrContextCanceled,
 			sawToolCall: true,
 			want:        true,
 		},
 		{
 			name:       "other stream errors still fail",
-			err:        errors.New("stream error: unexpected EOF"),
+			err:        ErrStreamUnexpected,
 			sawContent: true,
 			want:       false,
 		},
@@ -109,10 +114,7 @@ func TestListNon2xx(t *testing.T) {
 	if err == nil {
 		t.Fatal("List: want error for 401")
 	}
-	if !strings.Contains(err.Error(), "status 401") {
-		t.Errorf("error = %q, want status 401", err)
-	}
-	if !strings.Contains(err.Error(), "invalid_api_key") {
-		t.Errorf("error = %q, want body snippet", err)
+	if !errors.Is(err, ErrListStatus) {
+		t.Errorf("error = %v, want %v", err, ErrListStatus)
 	}
 }

@@ -2,11 +2,13 @@ package ollama
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	json "github.com/goccy/go-json"
 	"log/slog"
 	"net/http"
 	"time"
+
+	json "github.com/goccy/go-json"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
@@ -15,6 +17,13 @@ import (
 
 	sdk "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+)
+
+// Package-level List errors for errors.Is matching.
+var (
+	ErrListStatus  = errors.New("ollama list: unexpected status")
+	ErrListRequest = errors.New("ollama list request")
+	ErrListDecode  = errors.New("ollama list decode")
 )
 
 type OllamaProvider struct {
@@ -32,16 +41,16 @@ func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 	url := fmt.Sprintf("%s/api/tags", p.BaseURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("ollama list request: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrListRequest, err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ollama list: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrListRequest, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama list: unexpected status %d", resp.StatusCode)
+		return nil, fmt.Errorf("%w %d", ErrListStatus, resp.StatusCode)
 	}
 
 	var tags struct {
@@ -51,7 +60,7 @@ func (p *OllamaProvider) List(ctx context.Context) ([]remote.Model, error) {
 		} `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
-		return nil, fmt.Errorf("ollama list decode: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrListDecode, err)
 	}
 
 	var models []remote.Model

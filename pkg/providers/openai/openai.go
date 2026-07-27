@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +24,9 @@ import (
 // listHTTPClient bounds List so a hung /models endpoint cannot block forever.
 // http.DefaultClient has no Timeout.
 var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+// ErrListStatus is returned when the models endpoint responds non-2xx.
+var ErrListStatus = errors.New("openai list models: unexpected status")
 
 type OpenAIProvider struct {
 	BaseURL string
@@ -57,9 +61,9 @@ func (p *OpenAIProvider) List(ctx context.Context) ([]remote.Model, error) {
 		}
 		msg := strings.TrimSpace(string(body))
 		if msg != "" {
-			return nil, fmt.Errorf("openai list models: status %d: %s", resp.StatusCode, msg)
+			return nil, fmt.Errorf("%w %d: %s", ErrListStatus, resp.StatusCode, msg)
 		}
-		return nil, fmt.Errorf("openai list models: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("%w %d", ErrListStatus, resp.StatusCode)
 	}
 
 	var result struct {

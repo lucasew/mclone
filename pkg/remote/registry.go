@@ -32,7 +32,7 @@ type Factory func(name string, options map[string]any, resolve Resolver) (Provid
 // Resolver provides access to provider and tool source resolution.
 type Resolver struct {
 	Provider      func(remoteName string) (Provider, error)
-	Exported      func() (Provider, error)
+	Exported      func(ctx context.Context) (Provider, error)
 	ToolSource    func(toolName string) (tools.ToolSource, error)
 	UpdateOptions func(remoteName string, options map[string]any) error
 }
@@ -81,7 +81,7 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 		return p, nil
 	}
 
-	resolve.Exported = func() (Provider, error) {
+	resolve.Exported = func(ctx context.Context) (Provider, error) {
 		var remoteNames []string
 		for name, rc := range conf.Remotes {
 			if rc.Export {
@@ -111,7 +111,7 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 			if err != nil {
 				return nil, fmt.Errorf("exported tool %q: %w", name, err)
 			}
-			exportedTools, err := source.Tools(context.Background())
+			exportedTools, err := source.Tools(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("exported tool %q: %w", name, err)
 			}

@@ -45,7 +45,7 @@ func TestExportedProviderListsExportedRemotes(t *testing.T) {
 	}
 
 	resolve := NewResolver(writeTestConfig(t, conf))
-	provider, err := resolve.Exported()
+	provider, err := resolve.Exported(t.Context())
 	if err != nil {
 		t.Fatalf("Exported() error = %v", err)
 	}
@@ -85,7 +85,7 @@ func TestExportedProviderDetectsConflicts(t *testing.T) {
 	}
 
 	resolve := NewResolver(writeTestConfig(t, conf))
-	provider, err := resolve.Exported()
+	provider, err := resolve.Exported(t.Context())
 	if err != nil {
 		t.Fatalf("Exported() error = %v", err)
 	}
@@ -132,7 +132,7 @@ func TestExportedProviderIncludesImplicitBalanceGroup(t *testing.T) {
 	}
 
 	resolve := NewResolver(writeTestConfig(t, conf))
-	provider, err := resolve.Exported()
+	provider, err := resolve.Exported(t.Context())
 	if err != nil {
 		t.Fatalf("Exported() error = %v", err)
 	}

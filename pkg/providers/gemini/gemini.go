@@ -82,7 +82,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 		toolDefinitionCache.Store(t.Name, t)
 	}
 
-	contents, systemInstruction := ToGeminiContents(req.Turns)
+	contents, systemInstruction := ToGeminiContents(ctx, req.Turns)
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
 	}
@@ -240,7 +240,7 @@ func (p *GeminiProvider) client(ctx context.Context, httpClient *http.Client) (*
 	})
 }
 
-func ToGeminiContents(messages []message.Turn) ([]*genai.Content, *genai.Content) {
+func ToGeminiContents(ctx context.Context, messages []message.Turn) ([]*genai.Content, *genai.Content) {
 	var system *genai.Content
 	var rawTurns []*genai.Content
 
@@ -302,7 +302,7 @@ func ToGeminiContents(messages []message.Turn) ([]*genai.Content, *genai.Content
 						if err2 := json.Unmarshal(v.Arguments, &fallback); err2 == nil {
 							sdkArgs = map[string]interface{}{"input": fallback}
 						} else {
-							monitor.ReportError(context.Background(), err, "action", "gemini_arg_unmarshal_error")
+							monitor.ReportError(ctx, err, "action", "gemini_arg_unmarshal_error")
 						}
 					}
 				}

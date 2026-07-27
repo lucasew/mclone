@@ -22,6 +22,14 @@ import (
 	openaillm "github.com/tmc/langchaingo/llms/openai"
 )
 
+var (
+	ErrChatUsage          = errors.New("usage: mclone chat [model]")
+	ErrResponsesAPIClient = errors.New("langchaingo does not expose an OpenAI Responses API client in this version")
+	ErrUnknownBackend     = errors.New("unknown langchain backend")
+	ErrNoChoices          = errors.New("no choices returned")
+	ErrMaxIterations      = errors.New("max iterations reached without final answer")
+)
+
 var chatCmd = &cobra.Command{
 	Use:           "chat [model]",
 	Short:         "Start a LangChainGo chat session against a running mclone server",
@@ -135,7 +143,7 @@ type loggingRoundTripper struct {
 func runNativeChat(cmd *cobra.Command, target string) error {
 	modelName := strings.TrimSpace(target)
 	if modelName == "" {
-		return errors.New("usage: mclone chat [model]")
+		return ErrChatUsage
 	}
 	backend, err := cmd.Flags().GetString("backend")
 	if err != nil {
@@ -240,9 +248,9 @@ func newLangchainRunner(backend, baseURL, modelName, token string) (*langchainRu
 			anthropicllm.WithHTTPClient(httpClient),
 		)
 	case "openai-responses":
-		return nil, errors.New("langchaingo does not expose an OpenAI Responses API client in this version")
+		return nil, ErrResponsesAPIClient
 	default:
-		return nil, fmt.Errorf("unknown langchain backend: %s", backend)
+		return nil, fmt.Errorf("%w: %s", ErrUnknownBackend, backend)
 	}
 	if err != nil {
 		return nil, err
@@ -312,7 +320,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 			return err
 		}
 		if len(resp.Choices) == 0 {
-			return errors.New("no choices returned")
+			return ErrNoChoices
 		}
 
 		choice := resp.Choices[0]
@@ -398,7 +406,7 @@ func (runner *langchainRunner) run(ctx context.Context, prompt string, maxIterat
 		}
 	}
 
-	return fmt.Errorf("max iterations reached without final answer")
+	return ErrMaxIterations
 }
 
 func (runner *langchainRunner) runToolCall(ctx context.Context, call llms.ToolCall) (string, error) {

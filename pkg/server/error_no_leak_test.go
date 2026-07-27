@@ -12,14 +12,16 @@ import (
 	"github.com/lucasew/mclone/pkg/remote"
 )
 
+var ErrSecretBackendDetail = errors.New("secret backend detail: token=xyz")
+
 type errListProvider struct{}
 
 func (errListProvider) Name() string { return "err" }
 func (errListProvider) List(context.Context) ([]remote.Model, error) {
-	return nil, errors.New("secret backend detail: token=xyz")
+	return nil, ErrSecretBackendDetail
 }
 func (errListProvider) Chat(context.Context, message.Request) (<-chan message.Event, error) {
-	return nil, errors.New("secret backend detail: token=xyz")
+	return nil, ErrSecretBackendDetail
 }
 
 func TestServeModelsDoesNotLeakInternalError(t *testing.T) {

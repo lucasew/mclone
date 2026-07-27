@@ -27,14 +27,14 @@ var lsCmd = &cobra.Command{
 		}
 
 		remoteName := strings.TrimSuffix(args[0], ":")
-		return listModels(ctx, func() (remote.Provider, error) {
+		return listModels(ctx, func(ctx context.Context) (remote.Provider, error) {
 			return resolve.Provider(remoteName)
 		})
 	},
 }
 
-func listModels(ctx context.Context, resolveProvider func() (remote.Provider, error)) error {
-	p, err := resolveProvider()
+func listModels(ctx context.Context, resolveProvider func(context.Context) (remote.Provider, error)) error {
+	p, err := resolveProvider(ctx)
 	if err != nil {
 		return fmt.Errorf("creating provider: %w", err)
 	}

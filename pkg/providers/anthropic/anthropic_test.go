@@ -1,9 +1,9 @@
 package anthropic
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -82,11 +82,8 @@ func TestListNon2xx(t *testing.T) {
 	if err == nil {
 		t.Fatal("List: want error for 401")
 	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("error %q does not include status 401", err)
-	}
-	if strings.Contains(err.Error(), "invalid character") {
-		t.Errorf("error should not be a JSON decode failure, got %q", err)
+	if !errors.Is(err, ErrListStatus) {
+		t.Errorf("error = %v, want %v", err, ErrListStatus)
 	}
 }
 

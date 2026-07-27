@@ -1,9 +1,9 @@
 package ollama
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -56,11 +56,11 @@ func TestListNonOKStatus(t *testing.T) {
 	if err == nil {
 		t.Fatal("List: want error for non-200 status, got nil")
 	}
-	if !strings.Contains(err.Error(), "500") {
-		t.Errorf("error %q does not include status 500", err)
+	if !errors.Is(err, ErrListStatus) {
+		t.Errorf("error = %v, want %v", err, ErrListStatus)
 	}
-	if strings.Contains(err.Error(), "invalid character") {
-		t.Errorf("error should not be a JSON decode failure, got %q", err)
+	if errors.Is(err, ErrListDecode) {
+		t.Errorf("error should not be a decode failure, got %v", err)
 	}
 }
 
@@ -80,8 +80,8 @@ func TestListInvalidJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("List: want decode error, got nil")
 	}
-	if !strings.Contains(err.Error(), "decode") {
-		t.Errorf("error %q should mention decode", err)
+	if !errors.Is(err, ErrListDecode) {
+		t.Errorf("error = %v, want %v", err, ErrListDecode)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestListRequestError(t *testing.T) {
 	if err == nil {
 		t.Fatal("List: want request construction error, got nil")
 	}
-	if !strings.Contains(err.Error(), "request") {
-		t.Errorf("error %q should mention request construction", err)
+	if !errors.Is(err, ErrListRequest) {
+		t.Errorf("error = %v, want %v", err, ErrListRequest)
 	}
 }

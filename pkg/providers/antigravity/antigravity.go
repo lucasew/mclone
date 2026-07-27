@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,6 +28,24 @@ import (
 	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/providers/gemini"
 	"github.com/lucasew/mclone/pkg/remote"
+)
+
+var (
+	ErrModelNotSupported   = errors.New("model does not exist in antigravity")
+	ErrEndpointServer      = errors.New("endpoint server error")
+	ErrEndpointForbidden   = errors.New("endpoint forbidden")
+	ErrAPIError            = errors.New("api error")
+	ErrOnboard             = errors.New("onboard error")
+	ErrOnboardIncomplete   = errors.New("onboard incomplete and no operation name returned")
+	ErrOnboardTimeout      = errors.New("onboard timed out")
+	ErrNoToken             = errors.New("no token found in config")
+	ErrRefreshFailed       = errors.New("refresh failed")
+	ErrInvalidState        = errors.New("invalid state")
+	ErrNoCode              = errors.New("no code")
+	ErrLoginTimeout        = errors.New("timeout waiting for login")
+	ErrExchangeFailed      = errors.New("exchange failed")
+	ErrUnsupportedPlatform = errors.New("unsupported platform")
+	ErrProviderRenamed     = errors.New("provider type was renamed; update your config")
 )
 
 const (
@@ -136,7 +155,7 @@ func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan messag
 		out := make(chan message.Event)
 		go func() {
 			defer close(out)
-			out <- message.ResponseError{Err: fmt.Errorf("model %q does not exist in antigravity", req.Model)}
+			out <- message.ResponseError{Err: fmt.Errorf("%w: %q", ErrModelNotSupported, req.Model)}
 		}()
 		return out, nil
 	}
@@ -176,7 +195,7 @@ func (p *Provider) Chat(ctx context.Context, req message.Request) (<-chan messag
 			patchedMessages[i] = newMsg
 		}
 
-		contents, sys := gemini.ToGeminiContents(patchedMessages)
+		contents, sys := gemini.ToGeminiContents(ctx, patchedMessages)
 
 		genConfig := map[string]interface{}{}
 		if req.Options.Temperature != nil {
@@ -427,7 +446,7 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 				if err != nil {
 					lastErr = fmt.Errorf("endpoint %s server error %d: read body: %w", endpoint, resp.StatusCode, err)
 				} else {
-					lastErr = fmt.Errorf("endpoint %s server error %d: %s", endpoint, resp.StatusCode, string(respBody))
+					lastErr = fmt.Errorf("%w: %s status %d: %s", ErrEndpointServer, endpoint, resp.StatusCode, string(respBody))
 				}
 				slog.Warn("antigravity_endpoint_server_error", "endpoint", endpoint, "status", resp.StatusCode)
 				continue
@@ -439,12 +458,12 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 				continue
 			}
 			if resp.StatusCode == http.StatusForbidden && shouldFailoverEndpoint(endpoint, respBody) {
-				lastErr = fmt.Errorf("endpoint %s forbidden: %s", endpoint, string(respBody))
+				lastErr = fmt.Errorf("%w: %s: %s", ErrEndpointForbidden, endpoint, string(respBody))
 				slog.Warn("antigravity_endpoint_forbidden_failover", "endpoint", endpoint, "status", resp.StatusCode)
 				continue
 			}
 			p.setEndpointIndex(endpointIndex)
-			return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, string(respBody))
+			return nil, fmt.Errorf("%w %d: %s", ErrAPIError, resp.StatusCode, string(respBody))
 		}
 		if lastErr != nil {
 			if ctx.Err() != nil {
@@ -1359,7 +1378,7 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 		return "", fmt.Errorf("onboard read body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("onboard error %d: %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("%w %d: %s", ErrOnboard, resp.StatusCode, string(respBody))
 	}
 	var payload struct {
 		Name     string `json:"name"`
@@ -1377,7 +1396,7 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 		return payload.Response.CloudAICompanionProject.ID, nil
 	}
 	if payload.Name == "" {
-		return "", fmt.Errorf("onboard incomplete and no operation name returned")
+		return "", ErrOnboardIncomplete
 	}
 	opName := payload.Name
 	for i := 0; i < 12; i++ {
@@ -1408,7 +1427,7 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 			return payload.Response.CloudAICompanionProject.ID, nil
 		}
 	}
-	return "", fmt.Errorf("onboard timed out")
+	return "", ErrOnboardTimeout
 }
 
 func (p *Provider) loadToken() (*TokenData, error) {
@@ -1417,7 +1436,7 @@ func (p *Provider) loadToken() (*TokenData, error) {
 	}
 	tokenJSON, ok := p.options["token"].(string)
 	if !ok || tokenJSON == "" {
-		return nil, fmt.Errorf("no token found in config")
+		return nil, ErrNoToken
 	}
 	var token TokenData
 	if err := json.Unmarshal([]byte(tokenJSON), &token); err != nil {
@@ -1455,7 +1474,7 @@ func (p *Provider) refreshToken(refreshToken string) (*TokenData, error) {
 		if err != nil {
 			return nil, fmt.Errorf("refresh failed status %d: read body: %w", resp.StatusCode, err)
 		}
-		return nil, fmt.Errorf("refresh failed status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("%w status %d: %s", ErrRefreshFailed, resp.StatusCode, string(body))
 	}
 	var newToken TokenData
 	if err := json.NewDecoder(resp.Body).Decode(&newToken); err != nil {
@@ -1479,17 +1498,17 @@ func (p *Provider) performLoginFlow(ctx context.Context) (*TokenData, error) {
 		q := r.URL.Query()
 		if q.Get("state") != state {
 			http.Error(w, "Invalid state", http.StatusBadRequest)
-			errCh <- fmt.Errorf("invalid state")
+			errCh <- ErrInvalidState
 			return
 		}
 		code := q.Get("code")
 		if code == "" {
 			http.Error(w, "No code", http.StatusBadRequest)
-			errCh <- fmt.Errorf("no code")
+			errCh <- ErrNoCode
 			return
 		}
 		if _, err := w.Write([]byte("Login successful! You can close this window.")); err != nil {
-			monitor.ReportError(context.Background(), err, "action", "antigravity_response_write_failed")
+			monitor.ReportError(r.Context(), err, "action", "antigravity_response_write_failed")
 		}
 		codeCh <- code
 	})
@@ -1500,8 +1519,8 @@ func (p *Provider) performLoginFlow(ctx context.Context) (*TokenData, error) {
 		}
 	}()
 	defer func() {
-		if err := srv.Shutdown(context.Background()); err != nil {
-			monitor.ReportError(context.Background(), err, "action", "antigravity_server_shutdown_failed")
+		if err := srv.Shutdown(ctx); err != nil {
+			monitor.ReportError(ctx, err, "action", "antigravity_server_shutdown_failed")
 		}
 	}()
 	u, err := url.Parse(authURL)
@@ -1527,7 +1546,7 @@ func (p *Provider) performLoginFlow(ctx context.Context) (*TokenData, error) {
 	case err := <-errCh:
 		return nil, err
 	case <-time.After(5 * time.Minute):
-		return nil, fmt.Errorf("timeout waiting for login")
+		return nil, ErrLoginTimeout
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -1551,7 +1570,7 @@ func (p *Provider) exchangeCode(code, verifier string) (*TokenData, error) {
 		if err != nil {
 			return nil, fmt.Errorf("exchange failed status %d: read body: %w", resp.StatusCode, err)
 		}
-		return nil, fmt.Errorf("exchange failed status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("%w status %d: %s", ErrExchangeFailed, resp.StatusCode, string(body))
 	}
 	var token TokenData
 	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
@@ -1626,7 +1645,7 @@ func openBrowser(url string) {
 	case "darwin":
 		err = exec.Command("open", url).Start()
 	default:
-		err = fmt.Errorf("unsupported platform")
+		err = ErrUnsupportedPlatform
 	}
 	if err != nil {
 		slog.Warn("failed to open browser", "error", err)
@@ -1667,6 +1686,6 @@ func init() {
 	})
 
 	remote.Register("geminioauth", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
-		return nil, fmt.Errorf("provider type %q was renamed to %q; update your config", "geminioauth", "antigravity")
+		return nil, fmt.Errorf("%w: %q → %q", ErrProviderRenamed, "geminioauth", "antigravity")
 	})
 }

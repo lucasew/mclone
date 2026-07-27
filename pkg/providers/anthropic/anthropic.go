@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -53,6 +54,9 @@ type AnthropicConfig struct {
 	BaseURL string `mapstructure:"base_url"`
 }
 
+// ErrListStatus is returned when the models endpoint responds non-2xx.
+var ErrListStatus = errors.New("anthropic list models: unexpected status")
+
 func (p *AnthropicProvider) Name() string { return "anthropic" }
 
 func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
@@ -81,9 +85,9 @@ func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
 		}
 		msg := strings.TrimSpace(string(body))
 		if msg != "" {
-			return nil, fmt.Errorf("anthropic list models: status %d: %s", resp.StatusCode, msg)
+			return nil, fmt.Errorf("%w %d: %s", ErrListStatus, resp.StatusCode, msg)
 		}
-		return nil, fmt.Errorf("anthropic list models: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("%w %d", ErrListStatus, resp.StatusCode)
 	}
 
 	var result struct {
@@ -140,7 +144,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req message.Request) (<-ch
 
 	// Tools
 	if len(req.Options.Tools) > 0 {
-		params.Tools = toSDKTools(req.Options.Tools)
+		params.Tools = toSDKTools(ctx, req.Options.Tools)
 		slog.Info("anthropic_tools_sent", "count", len(params.Tools), "names", listToolNames(params.Tools))
 	}
 
@@ -270,7 +274,7 @@ func toSDKMessages(messages []message.Turn) []sdk.MessageParam {
 	return out
 }
 
-func toSDKTools(tools []message.ToolDefinition) []sdk.ToolUnionParam {
+func toSDKTools(ctx context.Context, tools []message.ToolDefinition) []sdk.ToolUnionParam {
 	var out []sdk.ToolUnionParam
 	for _, t := range tools {
 		switch t.Type {
@@ -283,7 +287,7 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ToolUnionParam {
 			// Regular function tool
 			var props map[string]any
 			if err := json.Unmarshal(t.Parameters, &props); err != nil {
-				monitor.ReportError(context.Background(), err, "action", "anthropic_tool_params_error", "name", t.Name)
+				monitor.ReportError(ctx, err, "action", "anthropic_tool_params_error", "name", t.Name)
 			}
 
 			schema := sdk.ToolInputSchemaParam{

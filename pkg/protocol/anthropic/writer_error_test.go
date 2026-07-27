@@ -9,9 +9,11 @@ import (
 	"github.com/lucasew/mclone/pkg/message"
 )
 
+var ErrSecretBackend = errors.New("secret backend token=xyz")
+
 func TestServeStreamSurfacesResponseError(t *testing.T) {
 	ch := make(chan message.Event, 1)
-	ch <- message.ResponseError{Err: errors.New("secret backend token=xyz")}
+	ch <- message.ResponseError{Err: ErrSecretBackend}
 	close(ch)
 
 	rr := httptest.NewRecorder()
@@ -34,7 +36,7 @@ func TestServeStreamSurfacesResponseError(t *testing.T) {
 
 func TestServeJSONSurfacesResponseError(t *testing.T) {
 	ch := make(chan message.Event, 1)
-	ch <- message.ResponseError{Err: errors.New("secret backend token=xyz")}
+	ch <- message.ResponseError{Err: ErrSecretBackend}
 	close(ch)
 
 	rr := httptest.NewRecorder()

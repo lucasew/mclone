@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
@@ -24,10 +25,15 @@ type ToolboxConfig struct {
 }
 
 type ToolboxProvider struct {
-	base     remote.Provider
-	tools    []tools.Tool
-	toolMap  map[string]tools.Tool
-	maxLoops int
+	base      remote.Provider
+	resolve   remote.Resolver
+	toolNames []string
+	maxLoops  int
+
+	toolsMu sync.Mutex
+	tools   []tools.Tool
+	toolMap map[string]tools.Tool
+	loaded  bool
 }
 
 func (p *ToolboxProvider) Name() string { return "toolbox" }
@@ -36,7 +42,52 @@ func (p *ToolboxProvider) List(ctx context.Context) ([]remote.Model, error) {
 	return p.base.List(ctx)
 }
 
+func (p *ToolboxProvider) ensureTools(ctx context.Context) error {
+	p.toolsMu.Lock()
+	defer p.toolsMu.Unlock()
+	if p.loaded {
+		return nil
+	}
+
+	allTools := make([]tools.Tool, 0)
+	toolMap := make(map[string]tools.Tool)
+	for _, tn := range p.toolNames {
+		tn = strings.TrimSpace(tn)
+		if tn == "" {
+			continue
+		}
+		source, err := p.resolve.ToolSource(tn)
+		if err != nil {
+			return fmt.Errorf("toolbox: failed to resolve tool source %q: %w", tn, err)
+		}
+		ts, err := source.Tools(ctx)
+		if err != nil {
+			return fmt.Errorf("toolbox: failed to get tools from %q: %w", tn, err)
+		}
+		for _, t := range ts {
+			key := strings.ToLower(t.Definition.Name)
+			if existing, ok := toolMap[key]; ok {
+				slog.Warn("toolbox_tool_collision",
+					"tool", t.Definition.Name,
+					"source", tn,
+					"overrides", existing.Definition.Name,
+				)
+			}
+			allTools = append(allTools, t)
+			toolMap[key] = t
+		}
+	}
+	p.tools = allTools
+	p.toolMap = toolMap
+	p.loaded = true
+	return nil
+}
+
 func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
+	if err := p.ensureTools(ctx); err != nil {
+		return nil, err
+	}
+
 	// Inject tool definitions, dedup by name (ours win)
 	ownNames := make(map[string]bool)
 	for _, t := range p.tools {
@@ -177,42 +228,11 @@ func init() {
 			return nil, fmt.Errorf("toolbox: failed to resolve provider %q: %w", cfg.Provider, err)
 		}
 
-		var allTools []tools.Tool
-		toolMap := make(map[string]tools.Tool)
-
-		for _, tn := range cfg.Tools {
-			tn = strings.TrimSpace(tn)
-			if tn == "" {
-				continue
-			}
-
-			source, err := resolve.ToolSource(tn)
-			if err != nil {
-				return nil, fmt.Errorf("toolbox: failed to resolve tool source %q: %w", tn, err)
-			}
-			ts, err := source.Tools(context.Background())
-			if err != nil {
-				return nil, fmt.Errorf("toolbox: failed to get tools from %q: %w", tn, err)
-			}
-			for _, t := range ts {
-				key := strings.ToLower(t.Definition.Name)
-				if existing, ok := toolMap[key]; ok {
-					slog.Warn("toolbox_tool_collision",
-						"tool", t.Definition.Name,
-						"source", tn,
-						"overrides", existing.Definition.Name,
-					)
-				}
-				allTools = append(allTools, t)
-				toolMap[key] = t
-			}
-		}
-
 		return &ToolboxProvider{
-			base:     base,
-			tools:    allTools,
-			toolMap:  toolMap,
-			maxLoops: cfg.MaxLoops,
+			base:      base,
+			resolve:   resolve,
+			toolNames: cfg.Tools,
+			maxLoops:  cfg.MaxLoops,
 		}, nil
 	})
 }

@@ -2,7 +2,7 @@ package toolbox
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"testing"
 
 	json "github.com/goccy/go-json"
@@ -61,6 +61,7 @@ func TestToolboxPreservesToolCallFinishReasonForPassthroughCalls(t *testing.T) {
 		base:     &passthroughProvider{},
 		toolMap:  map[string]tools.Tool{},
 		maxLoops: 1,
+		loaded:   true,
 	}
 
 	ch, err := provider.Chat(t.Context(), message.Request{Model: "demo"})
@@ -106,6 +107,7 @@ func TestToolboxMaxLoopsReturnsResponseError(t *testing.T) {
 			"echo": echo,
 		},
 		maxLoops: 2,
+		loaded:   true,
 	}
 
 	ch, err := provider.Chat(t.Context(), message.Request{Model: "demo"})
@@ -130,7 +132,7 @@ func TestToolboxMaxLoopsReturnsResponseError(t *testing.T) {
 	if finalErr == nil {
 		t.Fatal("expected ResponseError when max loops is exceeded")
 	}
-	if !strings.Contains(finalErr.Error(), "max tool loops") {
-		t.Fatalf("error = %q, want message mentioning max tool loops", finalErr)
+	if !errors.Is(finalErr, ErrMaxLoops) {
+		t.Fatalf("error = %v, want %v", finalErr, ErrMaxLoops)
 	}
 }
