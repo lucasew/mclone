@@ -1,10 +1,10 @@
 package webfetch
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -29,15 +29,15 @@ func TestParseFetchURL(t *testing.T) {
 	}
 
 	badCases := []struct {
-		raw     string
-		wantSub string
+		raw  string
+		want error
 	}{
-		{"file:///etc/passwd", "scheme"},
-		{"gopher://example.com/1", "scheme"},
-		{"//example.com/path", "scheme"},
-		{"not-a-url", "scheme"},
-		{"http:///no-host", "host"},
-		{"https://", "host"},
+		{"file:///etc/passwd", ErrUnsupportedScheme},
+		{"gopher://example.com/1", ErrUnsupportedScheme},
+		{"//example.com/path", ErrMissingScheme},
+		{"not-a-url", ErrMissingScheme},
+		{"http:///no-host", ErrMissingHost},
+		{"https://", ErrMissingHost},
 	}
 	for _, tc := range badCases {
 		_, err := parseFetchURL(tc.raw)
@@ -45,8 +45,8 @@ func TestParseFetchURL(t *testing.T) {
 			t.Errorf("parseFetchURL(%q): want error, got nil", tc.raw)
 			continue
 		}
-		if !strings.Contains(strings.ToLower(err.Error()), tc.wantSub) {
-			t.Errorf("parseFetchURL(%q): error %q should mention %q", tc.raw, err, tc.wantSub)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("parseFetchURL(%q): error %v, want %v", tc.raw, err, tc.want)
 		}
 	}
 }
@@ -110,8 +110,8 @@ func TestFetchAndParseRejectsNonHTTPScheme(t *testing.T) {
 	if err == nil {
 		t.Fatal("fetchAndParse: want error for file:// URL, got nil")
 	}
-	if !strings.Contains(err.Error(), "scheme") {
-		t.Errorf("error %q should mention scheme", err)
+	if !errors.Is(err, ErrUnsupportedScheme) {
+		t.Errorf("error %v, want %v", err, ErrUnsupportedScheme)
 	}
 }
 
@@ -141,11 +141,8 @@ func TestFetchAndParseNonOKStatus(t *testing.T) {
 	if err == nil {
 		t.Fatal("fetchAndParse: want error for non-2xx status, got nil")
 	}
-	if !strings.Contains(err.Error(), "404") {
-		t.Errorf("error %q does not include status 404", err)
-	}
-	if !strings.Contains(err.Error(), "status") {
-		t.Errorf("error %q should mention status", err)
+	if !errors.Is(err, ErrUnexpectedStatus) {
+		t.Errorf("error %v, want %v", err, ErrUnexpectedStatus)
 	}
 }
 
@@ -169,8 +166,8 @@ func TestFetchAndParseServerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("fetchAndParse: want error for 500, got nil")
 	}
-	if !strings.Contains(err.Error(), "500") {
-		t.Errorf("error %q does not include status 500", err)
+	if !errors.Is(err, ErrUnexpectedStatus) {
+		t.Errorf("error %v, want %v", err, ErrUnexpectedStatus)
 	}
 }
 
@@ -193,7 +190,7 @@ func TestFetchAndParseOKPassesStatusGate(t *testing.T) {
 		toolName:    "WebFetch",
 	}
 	_, err := s.fetchAndParse(t.Context(), srv.URL+"/", "html")
-	if err != nil && strings.Contains(err.Error(), "status") {
+	if errors.Is(err, ErrUnexpectedStatus) {
 		t.Fatalf("status gate should allow 200, got %v", err)
 	}
 	// err may be a parse/readability failure; that is fine for this test.
@@ -211,7 +208,7 @@ func TestSafeDialerBlocksCGNAT(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error dialing CGNAT 100.64.0.1, got nil")
 	}
-	if !strings.Contains(err.Error(), "refusing to connect to private network address") {
-		t.Fatalf("error %q should mention refusing private network", err)
+	if !errors.Is(err, ErrPrivateNetwork) {
+		t.Fatalf("error %v, want %v", err, ErrPrivateNetwork)
 	}
 }

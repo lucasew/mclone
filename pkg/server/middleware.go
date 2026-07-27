@@ -3,7 +3,7 @@ package server
 import (
 	"compress/flate"
 	"compress/gzip"
-	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,11 +13,13 @@ import (
 	"github.com/lucasew/mclone/pkg/monitor"
 )
 
+var ErrUnsupportedEncoding = errors.New("unsupported content-encoding")
+
 func requestDecompressionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := decodedRequestBody(r)
 		if err != nil {
-			serveJSONHTTPError(w, http.StatusBadRequest, err.Error())
+			serveJSONHTTPError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		if body != r.Body {
@@ -50,9 +52,9 @@ func decodedRequestBody(r *http.Request) (io.ReadCloser, error) {
 		}
 		return &compositeReadCloser{Reader: reader, closers: []io.Closer{zstdCloser{reader}, r.Body}}, nil
 	case "br":
-		return nil, fmt.Errorf("unsupported content-encoding: br")
+		return nil, fmt.Errorf("%w: br", ErrUnsupportedEncoding)
 	default:
-		return nil, fmt.Errorf("unsupported content-encoding: %s", encoding)
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedEncoding, encoding)
 	}
 }
 
@@ -78,10 +80,10 @@ func (c *compositeReadCloser) Close() error {
 	return firstErr
 }
 
-func serveJSONHTTPError(w http.ResponseWriter, status int, msg string) {
+func serveJSONHTTPError(w http.ResponseWriter, r *http.Request, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if _, err := io.WriteString(w, fmt.Sprintf("{\"error\":{\"message\":%q,\"type\":\"invalid_request_error\"}}\n", msg)); err != nil {
-		monitor.ReportError(context.Background(), err, "action", "serveJSONHTTPError_write")
+		monitor.ReportError(r.Context(), err, "action", "serveJSONHTTPError_write")
 	}
 }

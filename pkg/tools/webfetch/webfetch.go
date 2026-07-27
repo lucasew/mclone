@@ -30,6 +30,16 @@ const (
 	defaultMaxBodySize  = int64(2 * 1024 * 1024) // 2 MiB
 )
 
+// Package-level sentinels for errors.Is matching (including in tests).
+var (
+	ErrPrivateNetwork    = errors.New("refusing to connect to private network address")
+	ErrMissingScheme     = errors.New("webfetch: URL must use http or https scheme")
+	ErrUnsupportedScheme = errors.New("webfetch: unsupported URL scheme")
+	ErrMissingHost       = errors.New("webfetch: URL missing host")
+	ErrUnexpectedStatus  = errors.New("webfetch: unexpected status")
+	ErrTooManyRedirects  = errors.New("webfetch: too many redirects")
+)
+
 var webFetchToolSchema = json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","description":"The URL of the article or web page to fetch"},"format":{"type":"string","enum":["md","markdown","html","text","json"],"description":"The output format (default: md)"}},"required":["url"]}`)
 
 type webfetchConfig struct {
@@ -78,7 +88,7 @@ func newHTTPClient(timeout time.Duration, maxRedirects int) *http.Client {
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
-				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+				return fmt.Errorf("%w: stopped after %d", ErrTooManyRedirects, maxRedirects)
 			}
 			return nil
 		},
@@ -113,7 +123,7 @@ func newSafeDialer(timeout time.Duration) *net.Dialer {
 			}
 			ip := net.ParseIP(host)
 			if isBlockedIP(ip) {
-				return errors.New("refusing to connect to private network address")
+				return ErrPrivateNetwork
 			}
 			return nil
 		},
@@ -153,12 +163,12 @@ func parseFetchURL(raw string) (*url.URL, error) {
 	scheme := strings.ToLower(link.Scheme)
 	if scheme != "http" && scheme != "https" {
 		if link.Scheme == "" {
-			return nil, errors.New("webfetch: URL must use http or https scheme")
+			return nil, ErrMissingScheme
 		}
-		return nil, fmt.Errorf("webfetch: unsupported URL scheme %q (only http and https)", link.Scheme)
+		return nil, fmt.Errorf("%w %q (only http and https)", ErrUnsupportedScheme, link.Scheme)
 	}
 	if link.Host == "" {
-		return nil, errors.New("webfetch: URL missing host")
+		return nil, ErrMissingHost
 	}
 	return link, nil
 }
@@ -197,7 +207,7 @@ func (s *webfetchSource) fetchAndParse(ctx context.Context, rawLink string, form
 	// Non-2xx bodies are usually error pages; do not feed them to the
 	// readability parser as if they were the requested article.
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("webfetch: unexpected status %d for %s", res.StatusCode, link.String())
+		return "", fmt.Errorf("%w %d for %s", ErrUnexpectedStatus, res.StatusCode, link.String())
 	}
 
 	reader := io.LimitReader(res.Body, s.maxBodySize)

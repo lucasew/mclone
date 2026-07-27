@@ -83,7 +83,7 @@ func ToMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnion {
 
 // ToTools maps tool definitions to Chat Completions tool params.
 // reportAction labels monitor.ReportError when parameters fail to unmarshal.
-func ToTools(tools []message.ToolDefinition, reportAction string) []sdk.ChatCompletionToolParam {
+func ToTools(ctx context.Context, tools []message.ToolDefinition, reportAction string) []sdk.ChatCompletionToolParam {
 	var out []sdk.ChatCompletionToolParam
 	for _, t := range tools {
 		if t.Type != "" && t.Type != "function" {
@@ -92,7 +92,7 @@ func ToTools(tools []message.ToolDefinition, reportAction string) []sdk.ChatComp
 		}
 		var params shared.FunctionParameters
 		if err := json.Unmarshal(t.Parameters, &params); err != nil {
-			monitor.ReportError(context.Background(), err, "action", reportAction, "name", t.Name)
+			monitor.ReportError(ctx, err, "action", reportAction, "name", t.Name)
 		}
 
 		out = append(out, sdk.ChatCompletionToolParam{

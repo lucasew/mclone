@@ -3,6 +3,7 @@ package remote
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -12,6 +13,18 @@ import (
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/tools"
 	"github.com/mitchellh/mapstructure"
+)
+
+var (
+	ErrNoExportedRemotes     = errors.New("no exported remotes configured")
+	ErrToolNotFound          = errors.New("tool not found in config")
+	ErrRemoteNotFound        = errors.New("remote not found")
+	ErrRemoteUpdateNotFound  = errors.New("remote not found during update")
+	ErrUnknownProviderType   = errors.New("unknown provider type")
+	ErrRemoteHasNoType       = errors.New("remote has no type and no members")
+	ErrBalanceNotRegistered  = errors.New("balance provider not registered")
+	ErrExportedModelConflict = errors.New("exported model slug conflicts")
+	ErrModelNotExported      = errors.New("model not exported")
 )
 
 type Factory func(name string, options map[string]any, resolve Resolver) (Provider, error)
@@ -78,7 +91,7 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 		slices.Sort(remoteNames)
 
 		if len(remoteNames) == 0 {
-			return nil, fmt.Errorf("no exported remotes configured")
+			return nil, ErrNoExportedRemotes
 		}
 
 		merged := &exportedProvider{models: make(map[string]exportedModel)}
@@ -128,7 +141,7 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 
 		tc, ok := conf.Tools[toolName]
 		if !ok {
-			return nil, fmt.Errorf("tool %q not found in config", toolName)
+			return nil, fmt.Errorf("%w: %q", ErrToolNotFound, toolName)
 		}
 		ts, err := tools.New(tc.Type, toolName, tc.Options)
 		if err != nil {
@@ -146,7 +159,7 @@ func NewResolver(loader *config.ConfigLoader) Resolver {
 		}
 		rc, ok := c.Remotes[remoteName]
 		if !ok {
-			return fmt.Errorf("remote %q not found during update", remoteName)
+			return fmt.Errorf("%w: %q", ErrRemoteUpdateNotFound, remoteName)
 		}
 
 		slog.Info("updating_options", "remote", remoteName, "keys", len(options))
@@ -172,7 +185,7 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 	if exactMatch && rc.Type != "" {
 		factory, ok := registry[rc.Type]
 		if !ok {
-			return nil, fmt.Errorf("unknown provider type: %s", rc.Type)
+			return nil, fmt.Errorf("%w: %s", ErrUnknownProviderType, rc.Type)
 		}
 		return factory(remoteName, rc.Options, resolve)
 	}
@@ -189,9 +202,9 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 
 	if len(members) == 0 {
 		if exactMatch {
-			return nil, fmt.Errorf("remote %q has no type and no %s:* members", remoteName, remoteName)
+			return nil, fmt.Errorf("%w: %q has no type and no %s:* members", ErrRemoteHasNoType, remoteName, remoteName)
 		}
-		return nil, fmt.Errorf("remote %q not found", remoteName)
+		return nil, fmt.Errorf("%w: %q", ErrRemoteNotFound, remoteName)
 	}
 
 	if len(members) == 1 {
@@ -206,7 +219,7 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 
 	factory, ok := registry["balance"]
 	if !ok {
-		return nil, fmt.Errorf("balance provider not registered")
+		return nil, ErrBalanceNotRegistered
 	}
 
 	opts := make(map[string]any)
@@ -229,7 +242,7 @@ func resolveOne(conf *config.Config, remoteName string, resolve Resolver) (Provi
 func NewProvider(typeName string, name string, options map[string]any) (Provider, error) {
 	factory, ok := registry[typeName]
 	if !ok {
-		return nil, fmt.Errorf("unknown provider type: %s", typeName)
+		return nil, fmt.Errorf("%w: %s", ErrUnknownProviderType, typeName)
 	}
 	return factory(name, options, Resolver{})
 }
@@ -325,7 +338,7 @@ func (p *exportedProvider) List(ctx context.Context) ([]Model, error) {
 
 	if len(conflicts) > 0 {
 		slices.Sort(conflicts)
-		return nil, fmt.Errorf("exported model slug conflicts: %s", strings.Join(conflicts, ", "))
+		return nil, fmt.Errorf("%w: %s", ErrExportedModelConflict, strings.Join(conflicts, ", "))
 	}
 
 	return p.sortedModels(), nil
@@ -347,7 +360,7 @@ func (p *exportedProvider) chatBase(ctx context.Context, req message.Request) (<
 
 	entry, ok := p.models[req.Model]
 	if !ok {
-		return nil, fmt.Errorf("model %q not exported", req.Model)
+		return nil, fmt.Errorf("%w: %q", ErrModelNotExported, req.Model)
 	}
 	return entry.backend.provider.Chat(ctx, req)
 }

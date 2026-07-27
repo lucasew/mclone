@@ -89,14 +89,14 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 		option.WithAPIKey(p.APIKey),
 	)
 
-	logOpenAIRequestDebug(req)
+	logOpenAIRequestDebug(ctx, req)
 
 	params := sdk.ChatCompletionNewParams{
 		Model:    req.Model,
 		Messages: openaisdk.ToMessages(req.Turns),
 	}
 
-	logOpenAIParamsDebug(params)
+	logOpenAIParamsDebug(ctx, params)
 
 	if req.Options.Temperature != nil {
 		params.Temperature = sdk.Float(*req.Options.Temperature)
@@ -120,7 +120,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	}
 
 	if len(req.Options.Tools) > 0 {
-		params.Tools = openaisdk.ToTools(req.Options.Tools, "openai_tool_params_error")
+		params.Tools = openaisdk.ToTools(ctx, req.Options.Tools, "openai_tool_params_error")
 	}
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
@@ -181,8 +181,8 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	return out, nil
 }
 
-func logOpenAIRequestDebug(req message.Request) {
-	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+func logOpenAIRequestDebug(ctx context.Context, req message.Request) {
+	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
 		return
 	}
 	payload, err := json.MarshalIndent(req, "", "  ")
@@ -193,8 +193,8 @@ func logOpenAIRequestDebug(req message.Request) {
 	slog.Debug("openai_request_debug", "payload", string(payload))
 }
 
-func logOpenAIParamsDebug(params sdk.ChatCompletionNewParams) {
-	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+func logOpenAIParamsDebug(ctx context.Context, params sdk.ChatCompletionNewParams) {
+	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
 		return
 	}
 	payload, err := json.MarshalIndent(params, "", "  ")

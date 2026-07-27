@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -12,7 +13,7 @@ import (
 	openaiprotocol "github.com/lucasew/mclone/pkg/protocol/openai"
 )
 
-func serveRateLimitError(w http.ResponseWriter, writer protocol.Writer, err error) bool {
+func serveRateLimitError(ctx context.Context, w http.ResponseWriter, writer protocol.Writer, err error) bool {
 	var rl *message.ErrRateLimit
 	if !errors.As(err, &rl) {
 		return false
@@ -21,13 +22,13 @@ func serveRateLimitError(w http.ResponseWriter, writer protocol.Writer, err erro
 	w.WriteHeader(http.StatusTooManyRequests)
 	switch writer.(type) {
 	case *openaiprotocol.Writer:
-		protocol.WriteJSON(w, map[string]any{"error": map[string]any{"message": err.Error(), "type": "rate_limit_error", "code": "rate_limit_exceeded"}})
+		protocol.WriteJSON(ctx, w, map[string]any{"error": map[string]any{"message": err.Error(), "type": "rate_limit_error", "code": "rate_limit_exceeded"}})
 	case *anthropicprotocol.Writer:
-		protocol.WriteJSON(w, map[string]any{"type": "error", "error": map[string]any{"type": "rate_limit_error", "message": err.Error()}})
+		protocol.WriteJSON(ctx, w, map[string]any{"type": "error", "error": map[string]any{"type": "rate_limit_error", "message": err.Error()}})
 	case responsesAPIWriter:
-		protocol.WriteJSON(w, map[string]any{"type": "error", "error": map[string]any{"type": "rate_limit_error", "message": err.Error()}})
+		protocol.WriteJSON(ctx, w, map[string]any{"type": "error", "error": map[string]any{"type": "rate_limit_error", "message": err.Error()}})
 	default:
-		protocol.WriteJSON(w, map[string]any{"error": err.Error()})
+		protocol.WriteJSON(ctx, w, map[string]any{"error": err.Error()})
 	}
 	return true
 }

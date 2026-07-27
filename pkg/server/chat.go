@@ -108,7 +108,7 @@ func (s *Server) serveChatRequest(w http.ResponseWriter, r *http.Request, writer
 		reqSpan.RecordError(err)
 		reqSpan.SetStatus(codes.Error, err.Error())
 		monitor.ReportError(r.Context(), err, "action", "chat_failed")
-		if serveRateLimitError(w, writer, err) {
+		if serveRateLimitError(r.Context(), w, writer, err) {
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -123,7 +123,7 @@ func (s *Server) serveChatRequest(w http.ResponseWriter, r *http.Request, writer
 		providerSpan.SetAttributes(attribute.Int64("stream.first_event_ms", elapsed.Milliseconds()))
 		providerSpan.AddEvent("first_event")
 		slog.Debug("provider_first_event", "provider", s.cfg.Provider.Name(), "model", chatModel, "elapsed", elapsed)
-		if ev, isErr := firstEvent.(message.ResponseError); isErr && serveRateLimitError(w, writer, ev.Err) {
+		if ev, isErr := firstEvent.(message.ResponseError); isErr && serveRateLimitError(r.Context(), w, writer, ev.Err) {
 			providerSpan.RecordError(ev.Err)
 			providerSpan.SetStatus(codes.Error, ev.Err.Error())
 			providerSpan.SetAttributes(attribute.Int("stream.event_count", 1), attribute.Int64("stream.duration_ms", elapsed.Milliseconds()))
@@ -186,7 +186,7 @@ func (s *Server) serveChatRequest(w http.ResponseWriter, r *http.Request, writer
 		slog.Debug("provider_chat_finished", "provider", s.cfg.Provider.Name(), "model", chatModel, "elapsed", time.Since(startedAt), "events", eventCount)
 	}()
 
-	writer.ServeResponse(w, instrumented, responseModel, req.Stream)
+	writer.ServeResponse(r.Context(), w, instrumented, responseModel, req.Stream)
 }
 
 func (s *Server) bodyReader(r *http.Request) (io.Reader, bool) {

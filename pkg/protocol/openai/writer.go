@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,35 +15,35 @@ type Writer struct{}
 
 func NewWriter() *Writer { return &Writer{} }
 
-func (w *Writer) ServeResponse(rw http.ResponseWriter, ch <-chan message.Event, model string, stream bool) {
+func (w *Writer) ServeResponse(ctx context.Context, rw http.ResponseWriter, ch <-chan message.Event, model string, stream bool) {
 	if stream {
-		w.serveStream(rw, ch, model)
+		w.serveStream(ctx, rw, ch, model)
 	} else {
-		w.serveJSON(rw, ch, model)
+		w.serveJSON(ctx, rw, ch, model)
 	}
 }
 
-func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, model string) {
+func (w *Writer) serveStream(ctx context.Context, rw http.ResponseWriter, ch <-chan message.Event, model string) {
 	protocol.SetStreamHeaders(rw)
 
 	for event := range ch {
 		switch ev := event.(type) {
 		case message.TextDelta:
-			protocol.WriteSSEData(rw, ChatCompletionChunk{
+			protocol.WriteSSEData(ctx, rw, ChatCompletionChunk{
 				ID:      "mclone",
 				Object:  "chat.completion.chunk",
 				Model:   model,
 				Choices: []ChunkChoice{{Delta: ChunkDelta{Content: ev.Text}}},
 			})
 		case message.ReasoningDelta:
-			protocol.WriteSSEData(rw, ChatCompletionChunk{
+			protocol.WriteSSEData(ctx, rw, ChatCompletionChunk{
 				ID:      "mclone",
 				Object:  "chat.completion.chunk",
 				Model:   model,
 				Choices: []ChunkChoice{{Delta: ChunkDelta{Content: "<thought>" + ev.Text + "</thought>"}}},
 			})
 		case message.ToolCallFinished:
-			protocol.WriteSSEData(rw, ChatCompletionChunk{
+			protocol.WriteSSEData(ctx, rw, ChatCompletionChunk{
 				ID:      "mclone",
 				Object:  "chat.completion.chunk",
 				Model:   model,
@@ -53,7 +54,7 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 			if ev.Reason == message.StopReasonToolCall {
 				reason = "tool_calls"
 			}
-			protocol.WriteSSEData(rw, ChatCompletionChunk{
+			protocol.WriteSSEData(ctx, rw, ChatCompletionChunk{
 				ID:      "mclone",
 				Object:  "chat.completion.chunk",
 				Model:   model,
@@ -62,20 +63,20 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 		case message.ResponseError:
 			slog.Error("openai_stream_error", "error", ev.Err)
 			// Generic message only — never leak backend err.Error() to clients.
-			protocol.WriteSSEData(rw, map[string]any{
+			protocol.WriteSSEData(ctx, rw, map[string]any{
 				"error": map[string]any{
 					"message": "internal server error",
 					"type":    "server_error",
 				},
 			})
-			protocol.WriteSSERaw(rw, "[DONE]")
+			protocol.WriteSSERaw(ctx, rw, "[DONE]")
 			return
 		}
 	}
-	protocol.WriteSSERaw(rw, "[DONE]")
+	protocol.WriteSSERaw(ctx, rw, "[DONE]")
 }
 
-func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, model string) {
+func (w *Writer) serveJSON(ctx context.Context, rw http.ResponseWriter, ch <-chan message.Event, model string) {
 	var content strings.Builder
 	var toolCalls []ToolCall
 	finishReason := "stop"
@@ -97,7 +98,7 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, mode
 			slog.Error("openai_json_error", "error", ev.Err)
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusInternalServerError)
-			protocol.WriteJSON(rw, map[string]any{
+			protocol.WriteJSON(ctx, rw, map[string]any{
 				"error": map[string]any{
 					"message": "internal server error",
 					"type":    "server_error",
@@ -123,7 +124,7 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, mode
 	resp.Choices[0].Message.ToolCalls = append(resp.Choices[0].Message.ToolCalls, toolCalls...)
 
 	rw.Header().Set("Content-Type", "application/json")
-	protocol.WriteJSON(rw, resp)
+	protocol.WriteJSON(ctx, rw, resp)
 }
 
 func toOpenAIToolCall(call message.ToolCall) ToolCall {

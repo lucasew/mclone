@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,21 +16,21 @@ type Writer struct{}
 
 func NewWriter() *Writer { return &Writer{} }
 
-func (w *Writer) ServeResponse(rw http.ResponseWriter, ch <-chan message.Event, model string, stream bool) {
+func (w *Writer) ServeResponse(ctx context.Context, rw http.ResponseWriter, ch <-chan message.Event, model string, stream bool) {
 	if stream {
-		w.serveStream(rw, ch, model)
+		w.serveStream(ctx, rw, ch, model)
 	} else {
-		w.serveJSON(rw, ch, model)
+		w.serveJSON(ctx, rw, ch, model)
 	}
 }
 
-func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, model string) {
+func (w *Writer) serveStream(ctx context.Context, rw http.ResponseWriter, ch <-chan message.Event, model string) {
 	protocol.SetStreamHeaders(rw)
 
 	contentIndex := 0
 	hasCalledTool := false
 
-	protocol.WriteSSE(rw, "message_start", MessageStartEvent{
+	protocol.WriteSSE(ctx, rw, "message_start", MessageStartEvent{
 		Type: "message_start",
 		Message: MessageResponse{
 			ID: "mclone", Type: "message", Role: "assistant", Model: model,
@@ -38,7 +39,7 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 		},
 	})
 
-	protocol.WriteSSE(rw, "content_block_start", ContentBlockStartEvent{
+	protocol.WriteSSE(ctx, rw, "content_block_start", ContentBlockStartEvent{
 		Type:         "content_block_start",
 		Index:        contentIndex,
 		ContentBlock: ContentBlock{Type: "text", Text: ""},
@@ -49,7 +50,7 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 		case message.ResponseError:
 			slog.Error("anthropic_stream_error", "error", ev.Err)
 			// Generic message only — never leak backend err.Error() to clients.
-			protocol.WriteSSE(rw, "error", map[string]any{
+			protocol.WriteSSE(ctx, rw, "error", map[string]any{
 				"type": "error",
 				"error": map[string]any{
 					"type":    "api_error",
@@ -58,22 +59,22 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 			})
 			return
 		case message.ReasoningDelta:
-			protocol.WriteSSE(rw, "content_block_start", ContentBlockStartEvent{
+			protocol.WriteSSE(ctx, rw, "content_block_start", ContentBlockStartEvent{
 				Type:         "content_block_start",
 				Index:        contentIndex,
 				ContentBlock: ContentBlock{Type: "text", Text: ""},
 			})
-			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
+			protocol.WriteSSE(ctx, rw, "content_block_delta", ContentBlockDeltaEvent{
 				Type:  "content_block_delta",
 				Index: contentIndex,
 				Delta: BlockDelta{Type: "text_delta", Text: "<thought>" + ev.Text + "</thought>"},
 			})
-			protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
+			protocol.WriteSSE(ctx, rw, "content_block_stop", ContentBlockStopEvent{
 				Type: "content_block_stop", Index: contentIndex,
 			})
 			contentIndex++
 		case message.TextDelta:
-			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
+			protocol.WriteSSE(ctx, rw, "content_block_delta", ContentBlockDeltaEvent{
 				Type:  "content_block_delta",
 				Index: contentIndex,
 				Delta: BlockDelta{Type: "text_delta", Text: ev.Text},
@@ -81,7 +82,7 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 		case message.ToolCallFinished:
 			hasCalledTool = true
 
-			protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
+			protocol.WriteSSE(ctx, rw, "content_block_stop", ContentBlockStopEvent{
 				Type: "content_block_stop", Index: contentIndex,
 			})
 			contentIndex++
@@ -92,19 +93,19 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 			}
 
 			slog.Info("sending_tool_use", "name", ev.Call.Name, "id", id)
-			protocol.WriteSSE(rw, "content_block_start", ContentBlockStartEvent{
+			protocol.WriteSSE(ctx, rw, "content_block_start", ContentBlockStartEvent{
 				Type:  "content_block_start",
 				Index: contentIndex,
 				ContentBlock: ContentBlock{
 					Type: "tool_use", ID: id, Name: ev.Call.Name, Input: []byte("{}"),
 				},
 			})
-			protocol.WriteSSE(rw, "content_block_delta", ContentBlockDeltaEvent{
+			protocol.WriteSSE(ctx, rw, "content_block_delta", ContentBlockDeltaEvent{
 				Type:  "content_block_delta",
 				Index: contentIndex,
 				Delta: BlockDelta{Type: "input_json_delta", PartialJSON: string(ev.Call.Arguments)},
 			})
-			protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
+			protocol.WriteSSE(ctx, rw, "content_block_stop", ContentBlockStopEvent{
 				Type: "content_block_stop", Index: contentIndex,
 			})
 			contentIndex++
@@ -112,7 +113,7 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 		}
 	}
 
-	protocol.WriteSSE(rw, "content_block_stop", ContentBlockStopEvent{
+	protocol.WriteSSE(ctx, rw, "content_block_stop", ContentBlockStopEvent{
 		Type: "content_block_stop", Index: contentIndex,
 	})
 
@@ -121,15 +122,15 @@ func (w *Writer) serveStream(rw http.ResponseWriter, ch <-chan message.Event, mo
 		stopReason = "tool_use"
 	}
 
-	protocol.WriteSSE(rw, "message_delta", MessageDeltaEvent{
+	protocol.WriteSSE(ctx, rw, "message_delta", MessageDeltaEvent{
 		Type:  "message_delta",
 		Delta: MessageDelta{StopReason: stopReason},
 		Usage: Usage{},
 	})
-	protocol.WriteSSE(rw, "message_stop", MessageStopEvent{Type: "message_stop"})
+	protocol.WriteSSE(ctx, rw, "message_stop", MessageStopEvent{Type: "message_stop"})
 }
 
-func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, model string) {
+func (w *Writer) serveJSON(ctx context.Context, rw http.ResponseWriter, ch <-chan message.Event, model string) {
 	var content strings.Builder
 	var toolCalls []message.ToolCall
 	for event := range ch {
@@ -142,7 +143,7 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, mode
 			slog.Error("anthropic_json_error", "error", ev.Err)
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusInternalServerError)
-			protocol.WriteJSON(rw, map[string]any{
+			protocol.WriteJSON(ctx, rw, map[string]any{
 				"type": "error",
 				"error": map[string]any{
 					"type":    "api_error",
@@ -175,5 +176,5 @@ func (w *Writer) serveJSON(rw http.ResponseWriter, ch <-chan message.Event, mode
 	}
 
 	rw.Header().Set("Content-Type", "application/json")
-	protocol.WriteJSON(rw, resp)
+	protocol.WriteJSON(ctx, rw, resp)
 }

@@ -19,6 +19,14 @@ import (
 
 const defaultFailoverThreshold = 60 * time.Second
 
+var (
+	ErrAllBackendsFailed      = errors.New("all backends failed to list models")
+	ErrAllBackendsUnavailable = errors.New("all backends unavailable")
+	ErrAllBackendsExhausted   = errors.New("all backends exhausted")
+	ErrResolverRequired       = errors.New("balance provider requires a resolver")
+	ErrRemotesRequired        = errors.New("balance provider requires 'remotes' option (comma-separated)")
+)
+
 type backend struct {
 	provider          remote.Provider
 	name              string
@@ -89,7 +97,7 @@ func (p *BalanceProvider) List(ctx context.Context) ([]remote.Model, error) {
 	// Partial failure is fine (union of healthy backends). Total failure must
 	// not look like an empty catalog with a successful List.
 	if !anyOK && firstErr != nil {
-		return nil, fmt.Errorf("all backends failed to list models: %w", firstErr)
+		return nil, fmt.Errorf("%w: %w", ErrAllBackendsFailed, firstErr)
 	}
 	return all, nil
 }
@@ -101,7 +109,7 @@ func (p *BalanceProvider) Chat(ctx context.Context, req message.Request) (<-chan
 	if b == nil {
 		out := make(chan message.Event)
 		go func() {
-			out <- message.ResponseError{Err: fmt.Errorf("all backends unavailable")}
+			out <- message.ResponseError{Err: ErrAllBackendsUnavailable}
 			close(out)
 		}()
 		return out, nil
@@ -254,7 +262,7 @@ func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, req
 		p.affinity.Store(affinityKey, idx)
 		return ch, nil
 	}
-	return nil, fmt.Errorf("all backends exhausted")
+	return nil, ErrAllBackendsExhausted
 }
 
 func systemHash(messages []message.Turn) string {
@@ -296,12 +304,12 @@ func getString(m map[string]any, key string) string {
 func init() {
 	remote.Register("balance", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
 		if resolve.Provider == nil {
-			return nil, fmt.Errorf("balance provider requires a resolver")
+			return nil, ErrResolverRequired
 		}
 
 		remoteList := getString(options, "remotes")
 		if remoteList == "" {
-			return nil, fmt.Errorf("balance provider requires 'remotes' option (comma-separated)")
+			return nil, ErrRemotesRequired
 		}
 
 		groupThreshold := parseThreshold(getString(options, "failover_threshold"), defaultFailoverThreshold)

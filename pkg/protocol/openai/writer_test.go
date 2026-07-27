@@ -21,7 +21,7 @@ func TestServeJSONUsesToolCallsFinishReason(t *testing.T) {
 	close(ch)
 
 	rr := httptest.NewRecorder()
-	NewWriter().serveJSON(rr, ch, "claw")
+	NewWriter().serveJSON(t.Context(), rr, ch, "claw")
 
 	body := rr.Body.String()
 	if !strings.Contains(body, `"finish_reason":"tool_calls"`) {

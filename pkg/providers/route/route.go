@@ -2,12 +2,18 @@ package route
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
+)
+
+var (
+	ErrModelNotConfigured = errors.New("model not configured in route")
+	ErrResolverRequired   = errors.New("route provider requires a resolver")
 )
 
 type modelRoute struct {
@@ -42,7 +48,7 @@ func (p *RouteProvider) Chat(ctx context.Context, req message.Request) (<-chan m
 	if !ok {
 		// If exact match not found, maybe try "default" route?
 		// For now, fail.
-		return nil, fmt.Errorf("model %q not configured in route", req.Model)
+		return nil, fmt.Errorf("%w: %q", ErrModelNotConfigured, req.Model)
 	}
 
 	actualModel := req.Model
@@ -84,7 +90,7 @@ func (p *RouteProvider) Chat(ctx context.Context, req message.Request) (<-chan m
 func init() {
 	remote.Register("route", func(name string, options map[string]any, resolve remote.Resolver) (remote.Provider, error) {
 		if resolve.Provider == nil {
-			return nil, fmt.Errorf("route provider requires a resolver")
+			return nil, ErrResolverRequired
 		}
 
 		routes := make(map[string]modelRoute)

@@ -2,6 +2,7 @@ package toolbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -9,6 +10,11 @@ import (
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/lucasew/mclone/pkg/tools"
+)
+
+var (
+	ErrMaxLoops         = errors.New("toolbox: max tool loops")
+	ErrProviderRequired = errors.New("toolbox requires 'provider' option")
 )
 
 type ToolboxConfig struct {
@@ -146,7 +152,7 @@ func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan
 		// Exhausting the loop budget means the model kept requesting owned
 		// tools without producing a terminal reply. Completing with end_turn
 		// looks like success to clients; surface an error instead.
-		err := fmt.Errorf("toolbox: max tool loops (%d) exceeded", p.maxLoops)
+		err := fmt.Errorf("%w: %d exceeded", ErrMaxLoops, p.maxLoops)
 		slog.Warn("toolbox_max_loops", "max", p.maxLoops)
 		out <- message.ResponseError{Err: err}
 	}()
@@ -160,7 +166,7 @@ func init() {
 			return nil, err
 		}
 		if cfg.Provider == "" {
-			return nil, fmt.Errorf("toolbox requires 'provider' option")
+			return nil, ErrProviderRequired
 		}
 		if cfg.MaxLoops == 0 {
 			cfg.MaxLoops = 20

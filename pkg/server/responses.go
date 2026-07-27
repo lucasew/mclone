@@ -1,14 +1,16 @@
 package server
 
 import (
+	"context"
 	"fmt"
-	"github.com/goccy/go-json"
-	"github.com/lucasew/mclone/pkg/message"
-	"github.com/lucasew/mclone/pkg/protocol"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/goccy/go-json"
+	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/protocol"
 )
 
 type responsesRequest struct {
@@ -64,11 +66,11 @@ func (s *Server) serveResponsesRequest(w http.ResponseWriter, r *http.Request) {
 	var req responsesRequest
 	bodyReader, ok := s.bodyReader(r)
 	if !ok {
-		serveResponsesError(w, http.StatusBadRequest, "invalid_request_error", "invalid request body")
+		serveResponsesError(r.Context(), w, http.StatusBadRequest, "invalid_request_error", "invalid request body")
 		return
 	}
 	if err := json.NewDecoder(bodyReader).Decode(&req); err != nil {
-		serveResponsesError(w, http.StatusBadRequest, "invalid_request_error", "invalid request body")
+		serveResponsesError(r.Context(), w, http.StatusBadRequest, "invalid_request_error", "invalid request body")
 		return
 	}
 
@@ -90,17 +92,17 @@ func (s *Server) serveResponsesRequest(w http.ResponseWriter, r *http.Request) {
 
 	respChan, err := s.cfg.Provider.Chat(r.Context(), message.Request{Model: chatModel, Turns: turns, Options: opts})
 	if err != nil {
-		if serveRateLimitError(w, responsesAPIWriter{}, err) {
+		if serveRateLimitError(r.Context(), w, responsesAPIWriter{}, err) {
 			return
 		}
 		slog.Error("responses provider error", "err", err)
-		serveResponsesError(w, http.StatusInternalServerError, "server_error", "internal server error")
+		serveResponsesError(r.Context(), w, http.StatusInternalServerError, "server_error", "internal server error")
 		return
 	}
 
 	firstEvent, okFirst := <-respChan
 	if okFirst {
-		if ev, isErr := firstEvent.(message.ResponseError); isErr && serveRateLimitError(w, responsesAPIWriter{}, ev.Err) {
+		if ev, isErr := firstEvent.(message.ResponseError); isErr && serveRateLimitError(r.Context(), w, responsesAPIWriter{}, ev.Err) {
 			return
 		}
 	}
@@ -115,13 +117,13 @@ func (s *Server) serveResponsesRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	if req.Stream {
-		s.serveResponsesStream(w, instrumented, req.Model)
+		s.serveResponsesStream(r.Context(), w, instrumented, req.Model)
 		return
 	}
-	s.serveResponsesJSON(w, instrumented, req.Model)
+	s.serveResponsesJSON(r.Context(), w, instrumented, req.Model)
 }
 
-func (s *Server) serveResponsesJSON(w http.ResponseWriter, ch <-chan message.Event, model string) {
+func (s *Server) serveResponsesJSON(ctx context.Context, w http.ResponseWriter, ch <-chan message.Event, model string) {
 	var text strings.Builder
 	var output []any
 	for ev := range ch {
@@ -143,7 +145,7 @@ func (s *Server) serveResponsesJSON(w http.ResponseWriter, ch <-chan message.Eve
 			})
 		case message.ResponseError:
 			slog.Error("responses stream error", "err", v.Err)
-			serveResponsesError(w, http.StatusInternalServerError, "server_error", "internal server error")
+			serveResponsesError(ctx, w, http.StatusInternalServerError, "server_error", "internal server error")
 			return
 		}
 	}
@@ -170,10 +172,10 @@ func (s *Server) serveResponsesJSON(w http.ResponseWriter, ch <-chan message.Eve
 		Output:     output,
 	}
 	s.responsesStore.Store(resp.ID, resp)
-	protocol.WriteJSON(w, resp)
+	protocol.WriteJSON(ctx, w, resp)
 }
 
-func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.Event, model string) {
+func (s *Server) serveResponsesStream(ctx context.Context, w http.ResponseWriter, ch <-chan message.Event, model string) {
 	protocol.SetStreamHeaders(w)
 	responseID := fmt.Sprintf("resp_%d", time.Now().UnixNano())
 	messageID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
@@ -181,7 +183,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 	messageOpened := false
 	var text strings.Builder
 
-	protocol.WriteSSE(w, "response.created", map[string]any{
+	protocol.WriteSSE(ctx, w, "response.created", map[string]any{
 		"type":            "response.created",
 		"sequence_number": seq,
 		"response": map[string]any{
@@ -200,7 +202,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 		case message.TextDelta:
 			if !messageOpened {
 				messageOpened = true
-				protocol.WriteSSE(w, "response.output_item.added", map[string]any{
+				protocol.WriteSSE(ctx, w, "response.output_item.added", map[string]any{
 					"type":            "response.output_item.added",
 					"sequence_number": seq,
 					"output_index":    0,
@@ -215,7 +217,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 				seq++
 			}
 			text.WriteString(v.Text)
-			protocol.WriteSSE(w, "response.output_text.delta", map[string]any{
+			protocol.WriteSSE(ctx, w, "response.output_text.delta", map[string]any{
 				"type":            "response.output_text.delta",
 				"sequence_number": seq,
 				"output_index":    0,
@@ -230,7 +232,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 			if callID == "" {
 				callID = fmt.Sprintf("call_%d", time.Now().UnixNano())
 			}
-			protocol.WriteSSE(w, "response.output_item.added", map[string]any{
+			protocol.WriteSSE(ctx, w, "response.output_item.added", map[string]any{
 				"type":            "response.output_item.added",
 				"sequence_number": seq,
 				"output_index":    len(text.String()),
@@ -244,7 +246,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 				},
 			})
 			seq++
-			protocol.WriteSSE(w, "response.function_call_arguments.done", map[string]any{
+			protocol.WriteSSE(ctx, w, "response.function_call_arguments.done", map[string]any{
 				"type":            "response.function_call_arguments.done",
 				"sequence_number": seq,
 				"output_index":    len(text.String()),
@@ -253,7 +255,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 				"arguments":       string(v.Call.Arguments),
 			})
 			seq++
-			protocol.WriteSSE(w, "response.output_item.done", map[string]any{
+			protocol.WriteSSE(ctx, w, "response.output_item.done", map[string]any{
 				"type":            "response.output_item.done",
 				"sequence_number": seq,
 				"output_index":    len(text.String()),
@@ -268,7 +270,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 			})
 			seq++
 		case message.ResponseError:
-			protocol.WriteSSE(w, "error", map[string]any{
+			protocol.WriteSSE(ctx, w, "error", map[string]any{
 				"type":            "error",
 				"sequence_number": seq,
 				"message":         v.Err.Error(),
@@ -279,7 +281,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 		}
 	}
 	if messageOpened {
-		protocol.WriteSSE(w, "response.output_text.done", map[string]any{
+		protocol.WriteSSE(ctx, w, "response.output_text.done", map[string]any{
 			"type":            "response.output_text.done",
 			"sequence_number": seq,
 			"output_index":    0,
@@ -289,7 +291,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 			"logprobs":        []any{},
 		})
 		seq++
-		protocol.WriteSSE(w, "response.output_item.done", map[string]any{
+		protocol.WriteSSE(ctx, w, "response.output_item.done", map[string]any{
 			"type":            "response.output_item.done",
 			"sequence_number": seq,
 			"output_index":    0,
@@ -303,7 +305,7 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 		})
 		seq++
 	}
-	protocol.WriteSSE(w, "response.completed", map[string]any{
+	protocol.WriteSSE(ctx, w, "response.completed", map[string]any{
 		"type":            "response.completed",
 		"sequence_number": seq,
 		"response": map[string]any{
@@ -328,16 +330,16 @@ func (s *Server) serveResponsesStream(w http.ResponseWriter, ch <-chan message.E
 func (s *Server) serveResponsesRetrieve(w http.ResponseWriter, r *http.Request) {
 	responseID := strings.TrimPrefix(r.URL.Path, "/v1/responses/")
 	if responseID == "" || responseID == r.URL.Path {
-		serveResponsesError(w, http.StatusNotFound, "not_found_error", "response not found")
+		serveResponsesError(r.Context(), w, http.StatusNotFound, "not_found_error", "response not found")
 		return
 	}
 	value, ok := s.responsesStore.Load(responseID)
 	if !ok {
-		serveResponsesError(w, http.StatusNotFound, "not_found_error", "response not found")
+		serveResponsesError(r.Context(), w, http.StatusNotFound, "not_found_error", "response not found")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	protocol.WriteJSON(w, value)
+	protocol.WriteJSON(r.Context(), w, value)
 }
 
 func parseResponsesTurns(instructions, input json.RawMessage) []message.Turn {
@@ -460,12 +462,13 @@ func extractResponseArguments(v any) json.RawMessage {
 
 type responsesAPIWriter struct{}
 
-func (responsesAPIWriter) ServeResponse(http.ResponseWriter, <-chan message.Event, string, bool) {}
+func (responsesAPIWriter) ServeResponse(context.Context, http.ResponseWriter, <-chan message.Event, string, bool) {
+}
 
-func serveResponsesError(w http.ResponseWriter, status int, code, msg string) {
+func serveResponsesError(ctx context.Context, w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	protocol.WriteJSON(w, map[string]any{
+	protocol.WriteJSON(ctx, w, map[string]any{
 		"type": "error",
 		"error": map[string]any{
 			"type":    code,

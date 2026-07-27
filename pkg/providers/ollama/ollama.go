@@ -94,7 +94,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	}
 
 	if len(req.Options.Tools) > 0 {
-		params.Tools = openaisdk.ToTools(req.Options.Tools, "ollama_tool_params_error")
+		params.Tools = openaisdk.ToTools(ctx, req.Options.Tools, "ollama_tool_params_error")
 	}
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)

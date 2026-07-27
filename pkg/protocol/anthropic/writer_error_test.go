@@ -15,7 +15,7 @@ func TestServeStreamSurfacesResponseError(t *testing.T) {
 	close(ch)
 
 	rr := httptest.NewRecorder()
-	NewWriter().ServeResponse(rr, ch, "m", true)
+	NewWriter().ServeResponse(t.Context(), rr, ch, "m", true)
 	body := rr.Body.String()
 	if !strings.Contains(body, "event: error") {
 		t.Fatalf("missing error event: %q", body)
@@ -38,7 +38,7 @@ func TestServeJSONSurfacesResponseError(t *testing.T) {
 	close(ch)
 
 	rr := httptest.NewRecorder()
-	NewWriter().ServeResponse(rr, ch, "m", false)
+	NewWriter().ServeResponse(t.Context(), rr, ch, "m", false)
 	if rr.Code != 500 {
 		t.Fatalf("status=%d", rr.Code)
 	}

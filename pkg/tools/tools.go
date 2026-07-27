@@ -2,12 +2,16 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	json "github.com/goccy/go-json"
 
 	"github.com/lucasew/mclone/pkg/message"
 )
+
+// ErrUnknownType is returned when New is given an unregistered type name.
+var ErrUnknownType = errors.New("unknown tool source type")
 
 // Tool is a single callable tool with its definition and executor.
 type Tool struct {
@@ -34,7 +38,7 @@ func Register(typeName string, factory ToolSourceFactory) {
 func New(typeName, name string, options map[string]any) (ToolSource, error) {
 	factory, ok := registry[typeName]
 	if !ok {
-		return nil, fmt.Errorf("unknown tool source type: %s", typeName)
+		return nil, fmt.Errorf("%w: %s", ErrUnknownType, typeName)
 	}
 	return factory(name, options)
 }

@@ -3,11 +3,17 @@ package balance
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
+)
+
+var (
+	ErrFirstFailed  = errors.New("first failed")
+	ErrSecondFailed = errors.New("second failed")
+	ErrOneDown      = errors.New("one down")
+	ErrTwoDown      = errors.New("two down")
 )
 
 type stubProvider struct {
@@ -40,12 +46,12 @@ func TestBalanceProviderFailoverChainsAcrossMultipleBackends(t *testing.T) {
 		backends: []*backend{
 			{
 				name:              "one",
-				provider:          &stubProvider{name: "one", events: []message.Event{message.ResponseError{Err: errors.New("first failed")}}},
+				provider:          &stubProvider{name: "one", events: []message.Event{message.ResponseError{Err: ErrFirstFailed}}},
 				failoverThreshold: defaultFailoverThreshold,
 			},
 			{
 				name:              "two",
-				provider:          &stubProvider{name: "two", events: []message.Event{message.ResponseError{Err: errors.New("second failed")}}},
+				provider:          &stubProvider{name: "two", events: []message.Event{message.ResponseError{Err: ErrSecondFailed}}},
 				failoverThreshold: defaultFailoverThreshold,
 			},
 			{
@@ -84,11 +90,10 @@ func TestBalanceProviderFailoverChainsAcrossMultipleBackends(t *testing.T) {
 func TestListAllBackendsFail(t *testing.T) {
 	t.Parallel()
 
-	first := errors.New("one down")
 	provider := &BalanceProvider{
 		backends: []*backend{
-			{name: "one", provider: &stubProvider{name: "one", listErr: first}},
-			{name: "two", provider: &stubProvider{name: "two", listErr: errors.New("two down")}},
+			{name: "one", provider: &stubProvider{name: "one", listErr: ErrOneDown}},
+			{name: "two", provider: &stubProvider{name: "two", listErr: ErrTwoDown}},
 		},
 	}
 
@@ -96,11 +101,11 @@ func TestListAllBackendsFail(t *testing.T) {
 	if err == nil {
 		t.Fatalf("List() error = nil, want all-backends failure; models=%v", models)
 	}
-	if !errors.Is(err, first) {
+	if !errors.Is(err, ErrOneDown) {
 		t.Fatalf("List() error = %v, want wrapped first backend error", err)
 	}
-	if !strings.Contains(err.Error(), "all backends failed") {
-		t.Fatalf("List() error = %v, want all-backends message", err)
+	if !errors.Is(err, ErrAllBackendsFailed) {
+		t.Fatalf("List() error = %v, want %v", err, ErrAllBackendsFailed)
 	}
 	if models != nil {
 		t.Fatalf("List() models = %v, want nil on total failure", models)
@@ -112,7 +117,7 @@ func TestListPartialBackendFailure(t *testing.T) {
 
 	provider := &BalanceProvider{
 		backends: []*backend{
-			{name: "one", provider: &stubProvider{name: "one", listErr: errors.New("one down")}},
+			{name: "one", provider: &stubProvider{name: "one", listErr: ErrOneDown}},
 			{name: "two", provider: &stubProvider{name: "two", models: []remote.Model{{Slug: "m1", Name: "Model 1"}}}},
 		},
 	}

@@ -2,6 +2,7 @@ package duckduckgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,9 @@ const (
 	defaultTimeout     = 30 * time.Second
 	defaultMaxBodySize = int64(2 * 1024 * 1024) // 2 MiB HTML search page
 )
+
+// ErrUnexpectedStatus is returned when DuckDuckGo responds with a non-200 status.
+var ErrUnexpectedStatus = errors.New("DDG unexpected status")
 
 var (
 	urlRegex         = regexp.MustCompile(`uddg=([^&"]*)`)
@@ -83,7 +87,7 @@ func search(ctx context.Context, query string, maxResults int) ([]searchResult, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("DDG returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("%w: %d", ErrUnexpectedStatus, resp.StatusCode)
 	}
 
 	// Cap HTML size so a large or hostile response cannot exhaust memory.
