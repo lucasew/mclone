@@ -62,7 +62,7 @@ func (m *IncomingMessage) ToTurn() (message.Turn, error) {
 	var parts []message.Part
 
 	// Fast path based on first byte
-	firstByte := firstNonSpaceByte(m.Content)
+	firstByte := FirstNonSpaceByte(m.Content)
 
 	switch firstByte {
 	case '"':
@@ -160,7 +160,7 @@ func extractContent(raw json.RawMessage) string {
 		return ""
 	}
 
-	firstByte := firstNonSpaceByte(raw)
+	firstByte := FirstNonSpaceByte(raw)
 	switch firstByte {
 	case '"':
 		var s string
@@ -183,7 +183,8 @@ func extractContent(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func firstNonSpaceByte(data []byte) byte {
+// FirstNonSpaceByte returns the first non-space byte in data, or 0 if none.
+func FirstNonSpaceByte(data []byte) byte {
 	for _, b := range data {
 		if !unicode.IsSpace(rune(b)) {
 			return b
@@ -218,7 +219,7 @@ func normalizeToolArguments(raw json.RawMessage) json.RawMessage {
 		return json.RawMessage("{}")
 	}
 
-	firstByte := firstNonSpaceByte(raw)
+	firstByte := FirstNonSpaceByte(raw)
 	if firstByte == '{' || firstByte == '[' {
 		return raw
 	}
@@ -230,7 +231,7 @@ func normalizeToolArguments(raw json.RawMessage) json.RawMessage {
 			if trimmed == "" {
 				return json.RawMessage("{}")
 			}
-			if first := firstNonSpaceByte([]byte(trimmed)); first == '{' || first == '[' {
+			if first := FirstNonSpaceByte([]byte(trimmed)); first == '{' || first == '[' {
 				return json.RawMessage(trimmed)
 			}
 			b, err := json.Marshal(map[string]string{"input": encoded})

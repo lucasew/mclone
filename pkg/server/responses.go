@@ -2,15 +2,13 @@ package server
 
 import (
 	"fmt"
+	"github.com/goccy/go-json"
+	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/protocol"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
-	"unicode"
-
-	"github.com/goccy/go-json"
-	"github.com/lucasew/mclone/pkg/message"
-	"github.com/lucasew/mclone/pkg/protocol"
 )
 
 type responsesRequest struct {
@@ -350,7 +348,7 @@ func parseResponsesTurns(instructions, input json.RawMessage) []message.Turn {
 	if len(input) == 0 {
 		return turns
 	}
-	switch firstNonSpaceByte(input) {
+	switch protocol.FirstNonSpaceByte(input) {
 	case '"':
 		var s string
 		if err := json.Unmarshal(input, &s); err == nil && s != "" {
@@ -444,7 +442,7 @@ func extractResponseArguments(v any) json.RawMessage {
 		if trimmed == "" {
 			return json.RawMessage("{}")
 		}
-		if first := firstNonSpaceByte([]byte(trimmed)); first == '{' || first == '[' {
+		if first := protocol.FirstNonSpaceByte([]byte(trimmed)); first == '{' || first == '[' {
 			return json.RawMessage(trimmed)
 		}
 		b, err := json.Marshal(map[string]string{"input": args})
@@ -474,15 +472,6 @@ func serveResponsesError(w http.ResponseWriter, status int, code, msg string) {
 			"message": msg,
 		},
 	})
-}
-
-func firstNonSpaceByte(data []byte) byte {
-	for _, b := range data {
-		if !unicode.IsSpace(rune(b)) {
-			return b
-		}
-	}
-	return 0
 }
 
 func normalizeResponseRole(role string) message.Role {

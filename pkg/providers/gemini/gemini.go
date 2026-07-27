@@ -162,7 +162,11 @@ func (p *GeminiProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 							for k, v := range part.FunctionCall.Args {
 								currentArgs[k] = v
 							}
-							b, _ := json.Marshal(currentArgs)
+							b, err := json.Marshal(currentArgs)
+							if err != nil {
+								monitor.ReportError(ctx, err, "action", "gemini_arg_marshal_error")
+								continue
+							}
 							tc.Arguments = json.RawMessage(b)
 						}
 					}

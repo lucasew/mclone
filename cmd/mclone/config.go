@@ -3,7 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -13,6 +16,16 @@ import (
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/spf13/cobra"
 )
+
+// readInputLine reads a trimmed line from interactive stdin.
+// EOF with partial content is accepted; other read errors are logged.
+func readInputLine(reader *bufio.Reader) string {
+	s, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		slog.Error("read_input_line", "error", err)
+	}
+	return strings.TrimSpace(s)
+}
 
 var configCmd = &cobra.Command{
 	Use:   "config",
@@ -47,8 +60,7 @@ func promptBaseURL(reader *bufio.Reader, provider string, presets []baseURLPrese
 	fmt.Printf("%d) Custom URL\n", len(presets)+1)
 	fmt.Print("Choice (number or URL, blank for default): ")
 
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
+	choice := readInputLine(reader)
 	if choice == "" {
 		return defaultURL
 	}
@@ -60,8 +72,7 @@ func promptBaseURL(reader *bufio.Reader, provider string, presets []baseURLPrese
 		}
 		if idx == len(presets)+1 {
 			fmt.Print("Enter custom base URL: ")
-			url, _ := reader.ReadString('\n')
-			return strings.TrimSpace(url)
+			return readInputLine(reader)
 		}
 	}
 
@@ -103,13 +114,11 @@ func interactiveConfig(ctx context.Context) {
 		fmt.Println("q) Quit config")
 		fmt.Print("Select: ")
 
-		choice, _ := reader.ReadString('\n')
-		choice = strings.TrimSpace(choice)
+		choice := readInputLine(reader)
 
 		if choice == "d" {
 			fmt.Print("Enter name of remote to delete: ")
-			name, _ := reader.ReadString('\n')
-			name = strings.TrimSpace(name)
+			name := readInputLine(reader)
 			if _, ok := conf.Remotes[name]; ok {
 				delete(conf.Remotes, name)
 				if err := loader.Save(conf); err != nil {
@@ -126,8 +135,7 @@ func interactiveConfig(ctx context.Context) {
 
 		if choice == "n" {
 			fmt.Print("Enter name for new remote: ")
-			name, _ := reader.ReadString('\n')
-			name = strings.TrimSpace(name)
+			name := readInputLine(reader)
 			if name == "" {
 				continue
 			}
@@ -144,8 +152,7 @@ func interactiveConfig(ctx context.Context) {
 			typeWriter.Flush()
 
 			fmt.Print("Select type (number or name): ")
-			typeChoice, _ := reader.ReadString('\n')
-			typeChoice = strings.TrimSpace(typeChoice)
+			typeChoice := readInputLine(reader)
 
 			var selectedType string
 			for _, t := range types {
@@ -172,12 +179,10 @@ func interactiveConfig(ctx context.Context) {
 			switch selectedType {
 			case "local":
 				fmt.Print("Enter path: ")
-				path, _ := reader.ReadString('\n')
-				options["path"] = strings.TrimSpace(path)
+				options["path"] = readInputLine(reader)
 			case "ollama":
 				fmt.Print("Enter base URL (default http://localhost:11434): ")
-				url, _ := reader.ReadString('\n')
-				url = strings.TrimSpace(url)
+				url := readInputLine(reader)
 				if url == "" {
 					url = "http://localhost:11434"
 				}
@@ -191,8 +196,7 @@ func interactiveConfig(ctx context.Context) {
 				}, "https://api.openai.com/v1")
 				options["base_url"] = url
 				fmt.Print("Enter API Key: ")
-				key, _ := reader.ReadString('\n')
-				options["api_key"] = strings.TrimSpace(key)
+				options["api_key"] = readInputLine(reader)
 			case "anthropic":
 				url := promptBaseURL(reader, "Anthropic", []baseURLPreset{
 					{Label: "Anthropic", URL: "https://api.anthropic.com"},
@@ -200,16 +204,13 @@ func interactiveConfig(ctx context.Context) {
 				}, "https://api.anthropic.com")
 				options["base_url"] = url
 				fmt.Print("Enter API Key: ")
-				key, _ := reader.ReadString('\n')
-				options["api_key"] = strings.TrimSpace(key)
+				options["api_key"] = readInputLine(reader)
 			case "gemini":
 				fmt.Print("Enter API Key: ")
-				key, _ := reader.ReadString('\n')
-				options["api_key"] = strings.TrimSpace(key)
+				options["api_key"] = readInputLine(reader)
 			case "huggingface":
 				fmt.Print("Enter namespace (user or org): ")
-				ns, _ := reader.ReadString('\n')
-				options["namespace"] = strings.TrimSpace(ns)
+				options["namespace"] = readInputLine(reader)
 			case "antigravity":
 				fmt.Println("No specific options required (uses hardcoded client ID).")
 			case "ddg":
@@ -218,12 +219,10 @@ func interactiveConfig(ctx context.Context) {
 				fmt.Println("The Search provider wraps another provider (e.g., gemini) and uses a search backend (e.g., ddg).")
 
 				fmt.Print("Enter name of base provider (e.g. gemini): ")
-				prov, _ := reader.ReadString('\n')
-				options["provider"] = strings.TrimSpace(prov)
+				options["provider"] = readInputLine(reader)
 
 				fmt.Print("Enter name of search backend (default: ddg): ")
-				searcher, _ := reader.ReadString('\n')
-				searcher = strings.TrimSpace(searcher)
+				searcher := readInputLine(reader)
 				if searcher == "" {
 					searcher = "ddg"
 				}
@@ -231,8 +230,7 @@ func interactiveConfig(ctx context.Context) {
 			case "webfetch":
 				fmt.Println("The WebFetch provider wraps another provider to allow reading web pages.")
 				fmt.Print("Enter name of base provider (e.g. search_wrapper): ")
-				prov, _ := reader.ReadString('\n')
-				options["provider"] = strings.TrimSpace(prov)
+				options["provider"] = readInputLine(reader)
 			}
 
 			conf.Remotes[name] = config.RemoteConfig{
@@ -246,8 +244,7 @@ func interactiveConfig(ctx context.Context) {
 
 			if selectedType == "antigravity" {
 				fmt.Print("Authenticate now? [Y/n]: ")
-				authChoice, _ := reader.ReadString('\n')
-				authChoice = strings.TrimSpace(strings.ToLower(authChoice))
+				authChoice := strings.ToLower(readInputLine(reader))
 				if authChoice == "" || authChoice == "y" || authChoice == "yes" {
 					fmt.Println("Starting authentication flow...")
 
@@ -288,7 +285,11 @@ var configAddCmd = &cobra.Command{
 			return
 		}
 
-		options, _ := cmd.Flags().GetStringToString("opt")
+		options, err := cmd.Flags().GetStringToString("opt")
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
 
 		rc := config.RemoteConfig{
 			Type:    typeName,

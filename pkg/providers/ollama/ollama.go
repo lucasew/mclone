@@ -10,11 +10,11 @@ import (
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
+	"github.com/lucasew/mclone/pkg/providers/openaisdk"
 	"github.com/lucasew/mclone/pkg/remote"
 
 	sdk "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/shared"
 )
 
 type OllamaProvider struct {
@@ -69,7 +69,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 
 	params := sdk.ChatCompletionNewParams{
 		Model:    req.Model, // string
-		Messages: toSDKMessages(req.Turns),
+		Messages: openaisdk.ToMessages(req.Turns),
 	}
 
 	if req.Options.Temperature != nil {
@@ -94,7 +94,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	}
 
 	if len(req.Options.Tools) > 0 {
-		params.Tools = toSDKTools(req.Options.Tools)
+		params.Tools = openaisdk.ToTools(req.Options.Tools, "ollama_tool_params_error")
 	}
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
@@ -139,93 +139,6 @@ func (p *OllamaProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 		out <- message.ResponseCompleted{Reason: message.StopReasonEndTurn}
 	}()
 	return out, nil
-}
-
-func toSDKMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnion {
-	var out []sdk.ChatCompletionMessageParamUnion
-	for _, m := range messages {
-		switch m.Role {
-		case message.RoleSystem:
-			var text string
-			for _, p := range m.Parts {
-				if tp, ok := p.(message.TextPart); ok {
-					text += tp.Text
-				}
-			}
-			out = append(out, sdk.SystemMessage(text))
-		case message.RoleUser:
-			var text string
-			for _, p := range m.Parts {
-				switch v := p.(type) {
-				case message.TextPart:
-					text += v.Text
-				case message.ToolResultPart:
-					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
-				}
-			}
-			if text != "" {
-				out = append(out, sdk.UserMessage(text))
-			}
-		case message.RoleAssistant:
-			var textContent string
-			var toolCalls []sdk.ChatCompletionMessageToolCallParam
-			for _, p := range m.Parts {
-				switch v := p.(type) {
-				case message.TextPart:
-					textContent += v.Text
-				case message.ToolCallPart:
-					toolCalls = append(toolCalls, sdk.ChatCompletionMessageToolCallParam{
-						ID: v.ID,
-						Function: sdk.ChatCompletionMessageToolCallFunctionParam{
-							Name:      v.Name,
-							Arguments: string(v.Arguments),
-						},
-					})
-				}
-			}
-			if len(toolCalls) > 0 {
-				out = append(out, sdk.ChatCompletionMessageParamUnion{
-					OfAssistant: &sdk.ChatCompletionAssistantMessageParam{
-						Content: sdk.ChatCompletionAssistantMessageParamContentUnion{
-							OfString: sdk.String(textContent),
-						},
-						ToolCalls: toolCalls,
-					},
-				})
-			} else {
-				out = append(out, sdk.AssistantMessage(textContent))
-			}
-		case message.RoleTool:
-			for _, p := range m.Parts {
-				if v, ok := p.(message.ToolResultPart); ok {
-					out = append(out, sdk.ToolMessage(v.ToolCallID, v.Content))
-				}
-			}
-		}
-	}
-	return out
-}
-
-func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
-	var out []sdk.ChatCompletionToolParam
-	for _, t := range tools {
-		if t.Type != "" && t.Type != "function" {
-			continue
-		}
-		var params shared.FunctionParameters
-		if err := json.Unmarshal(t.Parameters, &params); err != nil {
-			monitor.ReportError(context.Background(), err, "action", "ollama_tool_params_error", "name", t.Name)
-		}
-
-		out = append(out, sdk.ChatCompletionToolParam{
-			Function: shared.FunctionDefinitionParam{
-				Name:        t.Name,                    // string
-				Description: sdk.String(t.Description), // param.Opt[string]
-				Parameters:  params,                    // shared.FunctionParameters
-			},
-		})
-	}
-	return out
 }
 
 func init() {

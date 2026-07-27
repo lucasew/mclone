@@ -3,12 +3,14 @@ package server
 import (
 	"compress/flate"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/lucasew/mclone/pkg/monitor"
 )
 
 func requestDecompressionMiddleware(next http.Handler) http.Handler {
@@ -79,5 +81,7 @@ func (c *compositeReadCloser) Close() error {
 func serveJSONHTTPError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, fmt.Sprintf("{\"error\":{\"message\":%q,\"type\":\"invalid_request_error\"}}\n", msg))
+	if _, err := io.WriteString(w, fmt.Sprintf("{\"error\":{\"message\":%q,\"type\":\"invalid_request_error\"}}\n", msg)); err != nil {
+		monitor.ReportError(context.Background(), err, "action", "serveJSONHTTPError_write")
+	}
 }

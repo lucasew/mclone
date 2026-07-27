@@ -17,15 +17,27 @@ var serveCmd = &cobra.Command{
 	Use:   "serve [remote]",
 	Short: "Serve a remote via OpenAI or Anthropic compatible API",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		remoteName := ""
 		if len(args) > 0 {
 			remoteName = strings.TrimSuffix(args[0], ":")
 		}
-		port, _ := cmd.Flags().GetInt("port")
-		overrideModel, _ := cmd.Flags().GetString("model")
-		verbose, _ := cmd.Flags().GetBool("verbose")
-		saveRawRequest, _ := cmd.Flags().GetString("save-raw-request")
+		port, err := cmd.Flags().GetInt("port")
+		if err != nil {
+			return err
+		}
+		overrideModel, err := cmd.Flags().GetString("model")
+		if err != nil {
+			return err
+		}
+		verbose, err := cmd.Flags().GetBool("verbose")
+		if err != nil {
+			return err
+		}
+		saveRawRequest, err := cmd.Flags().GetString("save-raw-request")
+		if err != nil {
+			return err
+		}
 
 		level := slog.LevelInfo
 		if verbose {
@@ -43,8 +55,7 @@ var serveCmd = &cobra.Command{
 		loader := config.LoaderFrom(cmd.Context())
 		conf, err := loader.Load()
 		if err != nil {
-			monitor.ReportError(cmd.Context(), err, "action", "load_config")
-			return
+			return fmt.Errorf("load config: %w", err)
 		}
 
 		resolve := remote.NewResolver(loader)
@@ -52,14 +63,12 @@ var serveCmd = &cobra.Command{
 		if remoteName == "" {
 			provider, err = resolve.Exported()
 			if err != nil {
-				monitor.ReportError(cmd.Context(), err, "action", "create_exported_provider")
-				return
+				return fmt.Errorf("create exported provider: %w", err)
 			}
 		} else {
 			provider, err = resolve.Provider(remoteName)
 			if err != nil {
-				monitor.ReportError(cmd.Context(), err, "action", "create_provider")
-				return
+				return fmt.Errorf("create provider: %w", err)
 			}
 		}
 
@@ -76,8 +85,9 @@ var serveCmd = &cobra.Command{
 		slog.Info("starting server", "remote", remoteNameOrExported(remoteName), "port", port)
 		srv := server.New(cfg)
 		if err := srv.ListenAndServe(fmt.Sprintf(":%d", port)); err != nil {
-			monitor.ReportError(cmd.Context(), err, "action", "server_listen")
+			return fmt.Errorf("server listen: %w", err)
 		}
+		return nil
 	},
 }
 

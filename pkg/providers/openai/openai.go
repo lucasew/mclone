@@ -13,11 +13,11 @@ import (
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
+	"github.com/lucasew/mclone/pkg/providers/openaisdk"
 	"github.com/lucasew/mclone/pkg/remote"
 
 	sdk "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/shared"
 )
 
 // listHTTPClient bounds List so a hung /models endpoint cannot block forever.
@@ -51,7 +51,10 @@ func (p *OpenAIProvider) List(ctx context.Context) ([]remote.Model, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if err != nil {
+			return nil, fmt.Errorf("openai list models: status %d: read body: %w", resp.StatusCode, err)
+		}
 		msg := strings.TrimSpace(string(body))
 		if msg != "" {
 			return nil, fmt.Errorf("openai list models: status %d: %s", resp.StatusCode, msg)
@@ -90,7 +93,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 
 	params := sdk.ChatCompletionNewParams{
 		Model:    req.Model,
-		Messages: toSDKMessages(req.Turns),
+		Messages: openaisdk.ToMessages(req.Turns),
 	}
 
 	logOpenAIParamsDebug(params)
@@ -117,7 +120,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	}
 
 	if len(req.Options.Tools) > 0 {
-		params.Tools = toSDKTools(req.Options.Tools)
+		params.Tools = openaisdk.ToTools(req.Options.Tools, "openai_tool_params_error")
 	}
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
@@ -208,95 +211,6 @@ func shouldIgnoreStreamError(err error, sawContent, sawToolCall bool) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "NO_ERROR; received from peer") || strings.Contains(msg, "context canceled")
-}
-
-func toSDKMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnion {
-	var out []sdk.ChatCompletionMessageParamUnion
-	for _, m := range messages {
-		switch m.Role {
-		case message.RoleSystem:
-			var textContent string
-			for _, p := range m.Parts {
-				if tp, ok := p.(message.TextPart); ok {
-					textContent += tp.Text
-				}
-			}
-			out = append(out, sdk.SystemMessage(textContent))
-		case message.RoleUser:
-			var textContent string
-			for _, p := range m.Parts {
-				switch v := p.(type) {
-				case message.TextPart:
-					textContent += v.Text
-				case message.ToolResultPart:
-					out = append(out, sdk.ToolMessage(v.Content, v.ToolCallID))
-				}
-			}
-			if textContent != "" {
-				out = append(out, sdk.UserMessage(textContent))
-			}
-		case message.RoleAssistant:
-			var textContent string
-			var toolCalls []sdk.ChatCompletionMessageToolCallParam
-			for _, p := range m.Parts {
-				switch v := p.(type) {
-				case message.TextPart:
-					textContent += v.Text
-				case message.ToolCallPart:
-					toolCalls = append(toolCalls, sdk.ChatCompletionMessageToolCallParam{
-						ID: v.ID,
-						Function: sdk.ChatCompletionMessageToolCallFunctionParam{
-							Name:      v.Name,
-							Arguments: string(v.Arguments),
-						},
-					})
-				}
-			}
-
-			if len(toolCalls) > 0 {
-				out = append(out, sdk.ChatCompletionMessageParamUnion{
-					OfAssistant: &sdk.ChatCompletionAssistantMessageParam{
-						Content: sdk.ChatCompletionAssistantMessageParamContentUnion{
-							OfString: sdk.String(textContent),
-						},
-						ToolCalls: toolCalls,
-					},
-				})
-			} else {
-				out = append(out, sdk.AssistantMessage(textContent))
-			}
-		case message.RoleTool:
-			for _, p := range m.Parts {
-				if v, ok := p.(message.ToolResultPart); ok {
-					out = append(out, sdk.ToolMessage(v.Content, v.ToolCallID))
-				}
-			}
-		}
-	}
-	return out
-}
-
-func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
-	var out []sdk.ChatCompletionToolParam
-	for _, t := range tools {
-		if t.Type != "" && t.Type != "function" {
-			slog.Debug("openai_skip_tool", "name", t.Name, "type", t.Type)
-			continue
-		}
-		var params shared.FunctionParameters
-		if err := json.Unmarshal(t.Parameters, &params); err != nil {
-			monitor.ReportError(context.Background(), err, "action", "openai_tool_params_error", "name", t.Name)
-		}
-
-		out = append(out, sdk.ChatCompletionToolParam{
-			Function: shared.FunctionDefinitionParam{
-				Name:        t.Name,                    // string
-				Description: sdk.String(t.Description), // param.Opt[string]
-				Parameters:  params,                    // shared.FunctionParameters
-			},
-		})
-	}
-	return out
 }
 
 func init() {

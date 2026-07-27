@@ -390,8 +390,12 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 				return resp, nil
 			}
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-				respBody, _ := io.ReadAll(resp.Body)
+				respBody, err := io.ReadAll(resp.Body)
 				resp.Body.Close()
+				if err != nil {
+					lastErr = fmt.Errorf("endpoint %s read body: %w", endpoint, err)
+					continue
+				}
 				retryAfter := parseRetryAfter(resp, respBody)
 				retrySeq := 0
 				if retryAfter > maxReasonableRetryAfter {
@@ -418,14 +422,22 @@ func (p *Provider) doChatRequest(ctx context.Context, request *http.Request, bod
 				goto nextAttempt
 			}
 			if resp.StatusCode >= 500 {
-				respBody, _ := io.ReadAll(resp.Body)
+				respBody, err := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				lastErr = fmt.Errorf("endpoint %s server error %d: %s", endpoint, resp.StatusCode, string(respBody))
+				if err != nil {
+					lastErr = fmt.Errorf("endpoint %s server error %d: read body: %w", endpoint, resp.StatusCode, err)
+				} else {
+					lastErr = fmt.Errorf("endpoint %s server error %d: %s", endpoint, resp.StatusCode, string(respBody))
+				}
 				slog.Warn("antigravity_endpoint_server_error", "endpoint", endpoint, "status", resp.StatusCode)
 				continue
 			}
-			respBody, _ := io.ReadAll(resp.Body)
+			respBody, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			if err != nil {
+				lastErr = fmt.Errorf("endpoint %s read body: %w", endpoint, err)
+				continue
+			}
 			if resp.StatusCode == http.StatusForbidden && shouldFailoverEndpoint(endpoint, respBody) {
 				lastErr = fmt.Errorf("endpoint %s forbidden: %s", endpoint, string(respBody))
 				slog.Warn("antigravity_endpoint_forbidden_failover", "endpoint", endpoint, "status", resp.StatusCode)
@@ -854,14 +866,14 @@ func flattenAnyOfOneOf(schema any) any {
 				continue
 			}
 			bestIdx, allTypes := scoreBestUnionOption(options)
-			selected, _ := flattenAnyOfOneOf(options[bestIdx]).(map[string]any)
-			if selected == nil {
+			selected, ok := flattenAnyOfOneOf(options[bestIdx]).(map[string]any)
+			if !ok || selected == nil {
 				selected = map[string]any{"type": "string"}
 			}
-			if parentDesc, _ := out["description"].(string); parentDesc != "" {
-				if childDesc, _ := selected["description"].(string); childDesc != "" && childDesc != parentDesc {
+			if parentDesc, ok := out["description"].(string); ok && parentDesc != "" {
+				if childDesc, ok := selected["description"].(string); ok && childDesc != "" && childDesc != parentDesc {
 					selected["description"] = parentDesc + " (" + childDesc + ")"
-				} else if childDesc == "" {
+				} else if !ok || childDesc == "" {
 					selected["description"] = parentDesc
 				}
 			}
@@ -1325,7 +1337,10 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 	url := "https://cloudcode-pa.googleapis.com/v1internal:onboardUser"
 	metadata := map[string]string{"ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}
 	bodyData := map[string]interface{}{"tierId": "free-tier", "metadata": metadata}
-	bodyBytes, _ := json.Marshal(bodyData)
+	bodyBytes, err := json.Marshal(bodyData)
+	if err != nil {
+		return "", fmt.Errorf("onboard marshal: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", err
@@ -1339,7 +1354,10 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 		return "", err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("onboard read body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("onboard error %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -1369,15 +1387,18 @@ func (p *Provider) onboardManagedProject(ctx context.Context, accessToken string
 		case <-time.After(5 * time.Second):
 		}
 		opURL := "https://cloudcode-pa.googleapis.com/v1internal/" + opName
-		reqOp, _ := http.NewRequestWithContext(ctx, "GET", opURL, nil)
+		reqOp, err := http.NewRequestWithContext(ctx, "GET", opURL, nil)
+		if err != nil {
+			continue
+		}
 		reqOp.Header = req.Header
 		respOp, err := http.DefaultClient.Do(reqOp)
 		if err != nil {
 			continue
 		}
-		bodyOp, _ := io.ReadAll(respOp.Body)
+		bodyOp, err := io.ReadAll(respOp.Body)
 		respOp.Body.Close()
-		if respOp.StatusCode != 200 {
+		if err != nil || respOp.StatusCode != 200 {
 			continue
 		}
 		if err := json.Unmarshal(bodyOp, &payload); err != nil {
@@ -1430,7 +1451,10 @@ func (p *Provider) refreshToken(refreshToken string) (*TokenData, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("refresh failed status %d: read body: %w", resp.StatusCode, err)
+		}
 		return nil, fmt.Errorf("refresh failed status %d: %s", resp.StatusCode, string(body))
 	}
 	var newToken TokenData
@@ -1480,7 +1504,10 @@ func (p *Provider) performLoginFlow(ctx context.Context) (*TokenData, error) {
 			monitor.ReportError(context.Background(), err, "action", "antigravity_server_shutdown_failed")
 		}
 	}()
-	u, _ := url.Parse(authURL)
+	u, err := url.Parse(authURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse auth URL: %w", err)
+	}
 	q := u.Query()
 	q.Set("client_id", clientID)
 	q.Set("redirect_uri", redirectURI)
@@ -1520,7 +1547,10 @@ func (p *Provider) exchangeCode(code, verifier string) (*TokenData, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("exchange failed status %d: read body: %w", resp.StatusCode, err)
+		}
 		return nil, fmt.Errorf("exchange failed status %d: %s", resp.StatusCode, string(body))
 	}
 	var token TokenData

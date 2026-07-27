@@ -477,8 +477,10 @@ func DecodeOptions(input any, output any) error {
 
 	decoder, err := mapstructure.NewDecoder(config)
 	if err != nil {
-		return err
+		return fmt.Errorf("mapstructure decoder: %w", err)
 	}
-
-	return decoder.Decode(input)
+	if err := decoder.Decode(input); err != nil {
+		return fmt.Errorf("decode options: %w", err)
+	}
+	return nil
 }

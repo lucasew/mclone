@@ -17,7 +17,9 @@ func TestSearchLimitsResponseBody(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, body)
+		if _, err := io.WriteString(w, body); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -35,9 +37,7 @@ func TestSearchLimitsResponseBody(t *testing.T) {
 		// parse may yield zero results; that is fine — must not OOM/hang.
 		t.Logf("parseResults err (ok if empty): %v", err)
 	}
-
-	// Also ensure search() uses LimitReader: monkey via custom client is hard
-	// because URL is fixed. Smoke-test search against real DDG is integration-only.
-	_ = t.Context()
-	_ = srv
+	// search() always hits duckduckgo.com (URL fixed); full search smoke is
+	// integration-only. srv is kept so future tests can redirect the client.
+	t.Logf("fixture server: %s", srv.URL)
 }

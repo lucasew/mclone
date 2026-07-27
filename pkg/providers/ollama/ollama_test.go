@@ -18,7 +18,9 @@ func TestListSuccess(t *testing.T) {
 			t.Errorf("method = %q, want GET", r.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"models":[{"name":"llama3","size":123},{"name":"mistral","size":456}]}`))
+		if _, err := w.Write([]byte(`{"models":[{"name":"llama3","size":123},{"name":"mistral","size":456}]}`)); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -43,7 +45,9 @@ func TestListNonOKStatus(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`internal error`))
+		if _, err := w.Write([]byte(`internal error`)); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -65,7 +69,9 @@ func TestListInvalidJSON(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`not-json`))
+		if _, err := w.Write([]byte(`not-json`)); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 

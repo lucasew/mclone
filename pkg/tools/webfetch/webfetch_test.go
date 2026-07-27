@@ -126,7 +126,9 @@ func TestFetchAndParseNonOKStatus(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`<!DOCTYPE html><html><body><h1>Not Found</h1><p>missing page content</p></body></html>`))
+		if _, err := w.Write([]byte(`<!DOCTYPE html><html><body><h1>Not Found</h1><p>missing page content</p></body></html>`)); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -152,7 +154,9 @@ func TestFetchAndParseServerError(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`internal error page with lots of html filler content`))
+		if _, err := w.Write([]byte(`internal error page with lots of html filler content`)); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -177,7 +181,9 @@ func TestFetchAndParseOKPassesStatusGate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`<!DOCTYPE html><html><head><title>T</title></head><body><p>x</p></body></html>`))
+		if _, err := w.Write([]byte(`<!DOCTYPE html><html><head><title>T</title></head><body><p>x</p></body></html>`)); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 

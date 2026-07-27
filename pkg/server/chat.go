@@ -192,9 +192,12 @@ func (s *Server) serveChatRequest(w http.ResponseWriter, r *http.Request, writer
 func (s *Server) bodyReader(r *http.Request) (io.Reader, bool) {
 	var bodyReader io.Reader = r.Body
 	if s.cfg.SaveRawRequestPath != "" {
-		body, _ := io.ReadAll(r.Body)
-		err := os.WriteFile(s.cfg.SaveRawRequestPath, body, 0644)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			monitor.ReportError(r.Context(), err, "action", "read_raw_request")
+			return r.Body, true
+		}
+		if err := os.WriteFile(s.cfg.SaveRawRequestPath, body, 0644); err != nil {
 			monitor.ReportError(r.Context(), err, "action", "save_raw_request", "path", s.cfg.SaveRawRequestPath)
 		} else {
 			slog.Debug("saved raw request", "path", s.cfg.SaveRawRequestPath)

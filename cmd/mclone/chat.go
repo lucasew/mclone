@@ -15,8 +15,8 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/spf13/cobra"
 	"github.com/lucasew/mclone/pkg/chatui"
+	"github.com/spf13/cobra"
 	"github.com/tmc/langchaingo/llms"
 	anthropicllm "github.com/tmc/langchaingo/llms/anthropic"
 	openaillm "github.com/tmc/langchaingo/llms/openai"
@@ -137,10 +137,22 @@ func runNativeChat(cmd *cobra.Command, target string) error {
 	if modelName == "" {
 		return errors.New("usage: mclone chat [model]")
 	}
-	backend, _ := cmd.Flags().GetString("backend")
-	apiKey, _ := cmd.Flags().GetString("api-key")
-	maxIterations, _ := cmd.Flags().GetInt("max-iterations")
-	baseURL := buildLangchainBaseURL(cmd, backend)
+	backend, err := cmd.Flags().GetString("backend")
+	if err != nil {
+		return err
+	}
+	apiKey, err := cmd.Flags().GetString("api-key")
+	if err != nil {
+		return err
+	}
+	maxIterations, err := cmd.Flags().GetInt("max-iterations")
+	if err != nil {
+		return err
+	}
+	baseURL, err := buildLangchainBaseURL(cmd, backend)
+	if err != nil {
+		return err
+	}
 
 	runner, err := newLangchainRunner(backend, baseURL, modelName, apiKey)
 	if err != nil {
@@ -166,13 +178,19 @@ func runNativeChat(cmd *cobra.Command, target string) error {
 	return err
 }
 
-func buildLangchainBaseURL(cmd *cobra.Command, backend string) string {
-	baseURL, _ := cmd.Flags().GetString("base-url")
-	if baseURL != "" {
-		return normalizeBaseURL(baseURL, backend)
+func buildLangchainBaseURL(cmd *cobra.Command, backend string) (string, error) {
+	baseURL, err := cmd.Flags().GetString("base-url")
+	if err != nil {
+		return "", err
 	}
-	port, _ := cmd.Flags().GetInt("port")
-	return normalizeBaseURL(fmt.Sprintf("http://127.0.0.1:%d", port), backend)
+	if baseURL != "" {
+		return normalizeBaseURL(baseURL, backend), nil
+	}
+	port, err := cmd.Flags().GetInt("port")
+	if err != nil {
+		return "", err
+	}
+	return normalizeBaseURL(fmt.Sprintf("http://127.0.0.1:%d", port), backend), nil
 }
 
 func normalizeBaseURL(rawBaseURL, backend string) string {

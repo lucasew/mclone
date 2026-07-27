@@ -71,7 +71,9 @@ func TestListSuccess(t *testing.T) {
 			t.Errorf("Authorization = %q, want Bearer test-key", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o","owned_by":"openai"},{"id":"o1-mini","owned_by":""}]}`))
+		if _, err := w.Write([]byte(`{"data":[{"id":"gpt-4o","owned_by":"openai"},{"id":"o1-mini","owned_by":""}]}`)); err != nil {
+			t.Errorf("write: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 

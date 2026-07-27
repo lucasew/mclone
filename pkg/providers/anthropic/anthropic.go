@@ -75,7 +75,10 @@ func (p *AnthropicProvider) List(ctx context.Context) ([]remote.Model, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if err != nil {
+			return nil, fmt.Errorf("anthropic list models: status %d: read body: %w", resp.StatusCode, err)
+		}
 		msg := strings.TrimSpace(string(body))
 		if msg != "" {
 			return nil, fmt.Errorf("anthropic list models: status %d: %s", resp.StatusCode, msg)
