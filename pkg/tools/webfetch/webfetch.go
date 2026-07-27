@@ -18,6 +18,7 @@ import (
 
 	"codeberg.org/readeck/go-readability/v2"
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/lucasew/mclone/pkg/tools"
 	"github.com/mattn/godown"
@@ -192,7 +193,11 @@ func (s *webfetchSource) fetchAndParse(ctx context.Context, rawLink string, form
 	if err != nil {
 		return "", err
 	}
-	defer res.Body.Close()
+	defer func() {
+		if cerr := res.Body.Close(); cerr != nil {
+			monitor.ReportError(ctx, cerr, "action", "webfetch_response_body_close")
+		}
+	}()
 
 	// Non-2xx bodies are usually error pages; do not feed them to the
 	// readability parser as if they were the requested article.
