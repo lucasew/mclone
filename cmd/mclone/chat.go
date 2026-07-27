@@ -23,13 +23,13 @@ import (
 )
 
 var chatCmd = &cobra.Command{
-	Use:   "chat [model]",
-	Short: "Start a LangChainGo chat session against a running mclone server",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := runNativeChat(cmd, args[0]); err != nil {
-			fmt.Printf("Error: %v\n", err)
-		}
+	Use:           "chat [model]",
+	Short:         "Start a LangChainGo chat session against a running mclone server",
+	Args:          cobra.ExactArgs(1),
+	SilenceErrors: true, // main prints the returned error once
+	SilenceUsage:  true, // operational failures are not flag misuse
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runNativeChat(cmd, args[0])
 	},
 }
 
