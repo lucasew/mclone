@@ -117,7 +117,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	}
 
 	if len(req.Options.Tools) > 0 {
-		params.Tools = toSDKTools(req.Options.Tools)
+		params.Tools = toSDKTools(ctx, req.Options.Tools)
 	}
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
@@ -276,7 +276,7 @@ func toSDKMessages(messages []message.Turn) []sdk.ChatCompletionMessageParamUnio
 	return out
 }
 
-func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
+func toSDKTools(ctx context.Context, tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
 	var out []sdk.ChatCompletionToolParam
 	for _, t := range tools {
 		if t.Type != "" && t.Type != "function" {
@@ -285,7 +285,7 @@ func toSDKTools(tools []message.ToolDefinition) []sdk.ChatCompletionToolParam {
 		}
 		var params shared.FunctionParameters
 		if err := json.Unmarshal(t.Parameters, &params); err != nil {
-			monitor.ReportError(context.Background(), err, "action", "openai_tool_params_error", "name", t.Name)
+			monitor.ReportError(ctx, err, "action", "openai_tool_params_error", "name", t.Name)
 		}
 
 		out = append(out, sdk.ChatCompletionToolParam{
