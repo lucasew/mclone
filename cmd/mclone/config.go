@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"slices"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/lucasew/mclone/pkg/config"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 	"github.com/spf13/cobra"
 )
@@ -22,7 +22,7 @@ import (
 func readInputLine(reader *bufio.Reader) string {
 	s, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		slog.Error("read_input_line", "error", err)
+		monitor.ReportError(context.Background(), err, "action", "read_input_line")
 	}
 	return strings.TrimSpace(s)
 }

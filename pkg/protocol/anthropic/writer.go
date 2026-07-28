@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/protocol"
 )
 
@@ -48,7 +49,7 @@ func (w *Writer) serveStream(ctx context.Context, rw http.ResponseWriter, ch <-c
 	for event := range ch {
 		switch ev := event.(type) {
 		case message.ResponseError:
-			slog.Error("anthropic_stream_error", "error", ev.Err)
+			monitor.ReportError(ctx, ev.Err, "action", "anthropic_stream_error")
 			// Generic message only — never leak backend err.Error() to clients.
 			protocol.WriteSSE(ctx, rw, "error", map[string]any{
 				"type": "error",
@@ -140,7 +141,7 @@ func (w *Writer) serveJSON(ctx context.Context, rw http.ResponseWriter, ch <-cha
 		case message.ToolCallFinished:
 			toolCalls = append(toolCalls, ev.Call)
 		case message.ResponseError:
-			slog.Error("anthropic_json_error", "error", ev.Err)
+			monitor.ReportError(ctx, ev.Err, "action", "anthropic_json_error")
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusInternalServerError)
 			protocol.WriteJSON(ctx, rw, map[string]any{

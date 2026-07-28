@@ -3,11 +3,11 @@ package openai
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/lucasew/mclone/pkg/message"
+	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/protocol"
 )
 
@@ -61,7 +61,7 @@ func (w *Writer) serveStream(ctx context.Context, rw http.ResponseWriter, ch <-c
 				Choices: []ChunkChoice{{Delta: ChunkDelta{}, FinishReason: &reason}},
 			})
 		case message.ResponseError:
-			slog.Error("openai_stream_error", "error", ev.Err)
+			monitor.ReportError(ctx, ev.Err, "action", "openai_stream_error")
 			// Generic message only — never leak backend err.Error() to clients.
 			protocol.WriteSSEData(ctx, rw, map[string]any{
 				"error": map[string]any{
@@ -95,7 +95,7 @@ func (w *Writer) serveJSON(ctx context.Context, rw http.ResponseWriter, ch <-cha
 				finishReason = "tool_calls"
 			}
 		case message.ResponseError:
-			slog.Error("openai_json_error", "error", ev.Err)
+			monitor.ReportError(ctx, ev.Err, "action", "openai_json_error")
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusInternalServerError)
 			protocol.WriteJSON(ctx, rw, map[string]any{
