@@ -16,6 +16,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/lucasew/mclone/pkg/chatui"
+	"github.com/lucasew/mclone/pkg/httpclient"
 	"github.com/spf13/cobra"
 	"github.com/tmc/langchaingo/llms"
 	anthropicllm "github.com/tmc/langchaingo/llms/anthropic"
@@ -228,8 +229,10 @@ func normalizeBaseURL(rawBaseURL, backend string) string {
 func newLangchainRunner(backend, baseURL, modelName, token string) (*langchainRunner, error) {
 	var model llms.Model
 	var err error
+	// No Client.Timeout: stream bodies can run longer than any short deadline.
+	// StreamTransport still bounds dial and response-header waits.
 	httpClient := &http.Client{
-		Transport: loggingRoundTripper{base: http.DefaultTransport},
+		Transport: loggingRoundTripper{base: httpclient.StreamTransport},
 	}
 
 	switch backend {

@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	json "github.com/goccy/go-json"
 
+	"github.com/lucasew/mclone/pkg/httpclient"
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
@@ -21,28 +20,9 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
-// listHTTPClient bounds List so a hung /v1/models endpoint cannot block forever.
-// http.DefaultClient has no Timeout.
-var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
-
-// streamHTTPClient is used for Chat SSE. No overall Timeout so long streams can
-// complete; dial and response-header deadlines still bound connection stalls.
-// The request context cancels the body read when the caller aborts.
-var streamHTTPClient = &http.Client{
-	Transport: &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	},
-}
+// Shared clients (pkg/httpclient): List for models, Stream for Chat SSE.
+var listHTTPClient = httpclient.List
+var streamHTTPClient = httpclient.Stream
 
 type AnthropicProvider struct {
 	BaseURL string

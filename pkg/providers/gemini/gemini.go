@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -12,34 +11,17 @@ import (
 
 	json "github.com/goccy/go-json"
 
+	"github.com/lucasew/mclone/pkg/httpclient"
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/remote"
 	"google.golang.org/genai"
 )
 
-// listHTTPClient bounds List so a hung models endpoint cannot block forever.
+// Shared clients (pkg/httpclient): List for models, Stream for Chat SSE.
 // genai.NewClient defaults to &http.Client{} with no Timeout when HTTPClient is nil.
-var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
-
-// streamHTTPClient is used for Chat SSE. No overall Timeout so long streams can
-// complete; dial and response-header deadlines still bound connection stalls.
-// The request context cancels the body read when the caller aborts.
-var streamHTTPClient = &http.Client{
-	Transport: &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	},
-}
+var listHTTPClient = httpclient.List
+var streamHTTPClient = httpclient.Stream
 
 var signatureCache sync.Map
 var toolDefinitionCache sync.Map
