@@ -8,10 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	json "github.com/goccy/go-json"
 
+	"github.com/lucasew/mclone/pkg/httpclient"
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/monitor"
 	"github.com/lucasew/mclone/pkg/providers/openaisdk"
@@ -21,9 +21,9 @@ import (
 	"github.com/openai/openai-go/option"
 )
 
-// listHTTPClient bounds List so a hung /models endpoint cannot block forever.
-// http.DefaultClient has no Timeout.
-var listHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// Shared clients (pkg/httpclient): List for models, Stream for Chat SSE.
+var listHTTPClient = httpclient.List
+var streamHTTPClient = httpclient.Stream
 
 // ErrListStatus is returned when the models endpoint responds non-2xx.
 var ErrListStatus = errors.New("openai list models: unexpected status")
@@ -91,6 +91,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	client := sdk.NewClient(
 		option.WithBaseURL(p.BaseURL),
 		option.WithAPIKey(p.APIKey),
+		option.WithHTTPClient(streamHTTPClient),
 	)
 
 	logOpenAIRequestDebug(ctx, req)

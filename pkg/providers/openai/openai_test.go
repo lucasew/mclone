@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/lucasew/mclone/pkg/httpclient"
 )
 
 var (
@@ -12,6 +14,16 @@ var (
 	ErrContextCanceled   = errors.New("context canceled")
 	ErrStreamUnexpected  = errors.New("stream error: unexpected EOF")
 )
+
+func TestHTTPClientsUseSharedPackage(t *testing.T) {
+	t.Parallel()
+	if listHTTPClient != httpclient.List {
+		t.Fatal("listHTTPClient should be httpclient.List")
+	}
+	if streamHTTPClient != httpclient.Stream {
+		t.Fatal("streamHTTPClient should be httpclient.Stream")
+	}
+}
 
 func TestShouldIgnoreStreamError(t *testing.T) {
 	t.Parallel()
