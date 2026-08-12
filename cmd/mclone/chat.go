@@ -163,7 +163,12 @@ func runNativeChat(cmd *cobra.Command, target string) error {
 		return err
 	}
 
-	runner, err := newLangchainRunner(backend, baseURL, modelName, apiKey)
+	runner, err := newLangchainRunner(langchainRunnerOpts{
+		backend:   backend,
+		baseURL:   baseURL,
+		modelName: modelName,
+		token:     apiKey,
+	})
 	if err != nil {
 		return err
 	}
@@ -226,7 +231,15 @@ func normalizeBaseURL(rawBaseURL, backend string) string {
 	return strings.TrimSuffix(parsed.String(), "/")
 }
 
-func newLangchainRunner(backend, baseURL, modelName, token string) (*langchainRunner, error) {
+// langchainRunnerOpts groups constructor inputs for the CLI langchain runner.
+type langchainRunnerOpts struct {
+	backend   string
+	baseURL   string
+	modelName string
+	token     string
+}
+
+func newLangchainRunner(opts langchainRunnerOpts) (*langchainRunner, error) {
 	var model llms.Model
 	var err error
 	// No Client.Timeout: stream bodies can run longer than any short deadline.
@@ -235,25 +248,25 @@ func newLangchainRunner(backend, baseURL, modelName, token string) (*langchainRu
 		Transport: loggingRoundTripper{base: httpclient.StreamTransport},
 	}
 
-	switch backend {
+	switch opts.backend {
 	case "openai", "openai-legacy":
 		model, err = openaillm.New(
-			openaillm.WithBaseURL(baseURL),
-			openaillm.WithModel(modelName),
-			openaillm.WithToken(token),
+			openaillm.WithBaseURL(opts.baseURL),
+			openaillm.WithModel(opts.modelName),
+			openaillm.WithToken(opts.token),
 			openaillm.WithHTTPClient(httpClient),
 		)
 	case "anthropic":
 		model, err = anthropicllm.New(
-			anthropicllm.WithBaseURL(baseURL),
-			anthropicllm.WithModel(modelName),
-			anthropicllm.WithToken(token),
+			anthropicllm.WithBaseURL(opts.baseURL),
+			anthropicllm.WithModel(opts.modelName),
+			anthropicllm.WithToken(opts.token),
 			anthropicllm.WithHTTPClient(httpClient),
 		)
 	case "openai-responses":
 		return nil, ErrResponsesAPIClient
 	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnknownBackend, backend)
+		return nil, fmt.Errorf("%w: %s", ErrUnknownBackend, opts.backend)
 	}
 	if err != nil {
 		return nil, err
