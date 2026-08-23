@@ -3,10 +3,16 @@
 package httpclient
 
 import (
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// statusBodyLimit is how much of a non-2xx body is included in StatusError.
+const statusBodyLimit = 512
 
 // List bounds short request/response calls (e.g. model listing).
 // http.DefaultClient has no Timeout and can hang forever.
@@ -32,3 +38,21 @@ var StreamTransport = &http.Transport{
 // Stream is used for Chat SSE and other streaming APIs.
 // No overall Timeout: long streams must be able to complete.
 var Stream = &http.Client{Transport: StreamTransport}
+
+// StatusError returns nil when resp is 2xx.
+// Otherwise it reads up to 512 bytes of the body and wraps sentinel with the
+// status code and optional trimmed body text. readContext labels a body-read failure.
+func StatusError(resp *http.Response, sentinel error, readContext string) error {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, statusBodyLimit))
+	if err != nil {
+		return fmt.Errorf("%s: status %d: read body: %w", readContext, resp.StatusCode, err)
+	}
+	msg := strings.TrimSpace(string(body))
+	if msg != "" {
+		return fmt.Errorf("%w %d: %s", sentinel, resp.StatusCode, msg)
+	}
+	return fmt.Errorf("%w %d", sentinel, resp.StatusCode)
+}

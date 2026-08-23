@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -54,16 +53,8 @@ func (p *OpenAIProvider) List(ctx context.Context) ([]remote.Model, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
-		if err != nil {
-			return nil, fmt.Errorf("openai list models: status %d: read body: %w", resp.StatusCode, err)
-		}
-		msg := strings.TrimSpace(string(body))
-		if msg != "" {
-			return nil, fmt.Errorf("%w %d: %s", ErrListStatus, resp.StatusCode, msg)
-		}
-		return nil, fmt.Errorf("%w %d", ErrListStatus, resp.StatusCode)
+	if err := httpclient.StatusError(resp, ErrListStatus, "openai list models"); err != nil {
+		return nil, err
 	}
 
 	var result struct {
