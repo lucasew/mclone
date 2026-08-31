@@ -440,17 +440,11 @@ func stringifyResponseContent(v any) string {
 func extractResponseArguments(v any) json.RawMessage {
 	switch args := v.(type) {
 	case string:
-		trimmed := strings.TrimSpace(args)
-		if trimmed == "" {
+		b, err := json.Marshal(args)
+		if err != nil {
 			return json.RawMessage("{}")
 		}
-		if first := protocol.FirstNonSpaceByte([]byte(trimmed)); first == '{' || first == '[' {
-			return json.RawMessage(trimmed)
-		}
-		b, err := json.Marshal(map[string]string{"input": args})
-		if err == nil {
-			return json.RawMessage(b)
-		}
+		return protocol.NormalizeToolArguments(b)
 	case map[string]any, []any:
 		b, err := json.Marshal(args)
 		if err == nil {

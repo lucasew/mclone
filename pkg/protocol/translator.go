@@ -81,7 +81,7 @@ func (m *IncomingMessage) ToTurn() (message.Turn, error) {
 					parts = append(parts, parseText(b.Text)...)
 				case "tool_use":
 					parts = append(parts, message.ToolCallPart{
-						ID: b.ID, Name: b.Name, Arguments: normalizeToolArguments(b.Input),
+						ID: b.ID, Name: b.Name, Arguments: NormalizeToolArguments(b.Input),
 					})
 				case "tool_result":
 					id := b.ToolUseID
@@ -114,7 +114,7 @@ func (m *IncomingMessage) ToTurn() (message.Turn, error) {
 	if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 		for _, tc := range m.ToolCalls {
 			parts = append(parts, message.ToolCallPart{
-				ID: tc.ID, Name: tc.Function.Name, Arguments: normalizeToolArguments(tc.Function.Arguments),
+				ID: tc.ID, Name: tc.Function.Name, Arguments: NormalizeToolArguments(tc.Function.Arguments),
 			})
 		}
 	}
@@ -214,7 +214,8 @@ func mergeTextParts(parts []message.Part) []message.Part {
 	return result
 }
 
-func normalizeToolArguments(raw json.RawMessage) json.RawMessage {
+// NormalizeToolArguments coerces a tool-call argument payload into a JSON object or array.
+func NormalizeToolArguments(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return json.RawMessage("{}")
 	}
