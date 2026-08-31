@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
@@ -131,5 +132,121 @@ func TestListPartialBackendFailure(t *testing.T) {
 	}
 	if len(models[0].OwnedBy) != 1 || models[0].OwnedBy[0] != "two" {
 		t.Fatalf("List() OwnedBy = %v, want [two]", models[0].OwnedBy)
+	}
+}
+
+func TestSleepOrDoneRespectsCancel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	started := time.Now()
+	err := sleepOrDone(ctx, 5*time.Second)
+	elapsed := time.Since(started)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("sleepOrDone() error = %v, want context.Canceled", err)
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("sleepOrDone() blocked for %v after cancel, want immediate return", elapsed)
+	}
+}
+
+func TestSleepOrDoneZeroIsNoop(t *testing.T) {
+	t.Parallel()
+
+	if err := sleepOrDone(context.Background(), 0); err != nil {
+		t.Fatalf("sleepOrDone(0) error = %v, want nil", err)
+	}
+}
+
+func TestChatCooldownWaitCancelled(t *testing.T) {
+	t.Parallel()
+
+	// Only backend is cooling down within failover threshold; wait must honor ctx.
+	provider := &BalanceProvider{
+		backends: []*backend{
+			{
+				name:              "one",
+				provider:          &stubProvider{name: "one", events: []message.Event{message.TextDelta{Text: "should-not-run"}}},
+				availableAt:       time.Now().Add(5 * time.Second),
+				failoverThreshold: 30 * time.Second,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel almost immediately so we do not sleep the full cooldown.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	started := time.Now()
+	_, err := provider.Chat(ctx, message.Request{
+		Model: "demo",
+		Turns: []message.Turn{message.TextTurn(message.RoleSystem, "cancel-wait")},
+	})
+	elapsed := time.Since(started)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Chat() error = %v, want context.Canceled", err)
+	}
+	if elapsed >= 2*time.Second {
+		t.Fatalf("Chat() blocked for %v during cooldown wait after cancel", elapsed)
+	}
+}
+
+func TestFailoverCooldownWaitCancelled(t *testing.T) {
+	t.Parallel()
+
+	// First backend fails immediately; second is cooling down within threshold.
+	// Failover wait must return when ctx is cancelled.
+	provider := &BalanceProvider{
+		backends: []*backend{
+			{
+				name:              "one",
+				provider:          &stubProvider{name: "one", events: []message.Event{message.ResponseError{Err: errors.New("first failed")}}},
+				failoverThreshold: 30 * time.Second,
+			},
+			{
+				name:              "two",
+				provider:          &stubProvider{name: "two", events: []message.Event{message.TextDelta{Text: "ok"}}},
+				availableAt:       time.Now().Add(5 * time.Second),
+				failoverThreshold: 30 * time.Second,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	started := time.Now()
+	ch, err := provider.Chat(ctx, message.Request{
+		Model: "demo",
+		Turns: []message.Turn{message.TextTurn(message.RoleSystem, "failover-cancel")},
+	})
+	if err != nil {
+		// startBackend may surface cancel before returning a channel
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Chat() error = %v, want context.Canceled", err)
+		}
+		return
+	}
+
+	var gotErr error
+	for event := range ch {
+		if re, ok := event.(message.ResponseError); ok {
+			gotErr = re.Err
+		}
+	}
+	elapsed := time.Since(started)
+	if !errors.Is(gotErr, context.Canceled) {
+		t.Fatalf("stream error = %v, want context.Canceled", gotErr)
+	}
+	if elapsed >= 2*time.Second {
+		t.Fatalf("failover wait blocked for %v after cancel", elapsed)
 	}
 }

@@ -105,7 +105,10 @@ func (p *BalanceProvider) List(ctx context.Context) ([]remote.Model, error) {
 func (p *BalanceProvider) Chat(ctx context.Context, req message.Request) (<-chan message.Event, error) {
 	affinityKey := systemHash(req.Turns)
 	slog.Info("balance_system_prompt_hash", "hash", affinityKey)
-	b := p.pickBackend(affinityKey)
+	b, err := p.pickBackend(ctx, affinityKey)
+	if err != nil {
+		return nil, err
+	}
 	if b == nil {
 		out := make(chan message.Event)
 		go func() {
@@ -120,18 +123,36 @@ func (p *BalanceProvider) Chat(ctx context.Context, req message.Request) (<-chan
 	return p.startBackend(ctx, b, req, affinityKey)
 }
 
-func (p *BalanceProvider) pickBackend(affinityKey string) *backend {
+// sleepOrDone waits for d or returns early if ctx is cancelled.
+// Cooldown waits must not ignore client disconnect / request cancel.
+func sleepOrDone(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func (p *BalanceProvider) pickBackend(ctx context.Context, affinityKey string) (*backend, error) {
 	// Check affinity first
 	if idx, ok := p.affinity.Load(affinityKey); ok {
 		b := p.backends[idx.(int)]
 		wait := time.Until(b.getAvailableAt())
 		if wait <= 0 {
-			return b
+			return b, nil
 		}
 		if wait <= b.failoverThreshold {
 			slog.Debug("balance_waiting", "backend", b.name, "wait", wait)
-			time.Sleep(wait)
-			return b
+			if err := sleepOrDone(ctx, wait); err != nil {
+				return nil, err
+			}
+			return b, nil
 		}
 		// Affinity backend too slow, pick another
 	}
@@ -141,18 +162,20 @@ func (p *BalanceProvider) pickBackend(affinityKey string) *backend {
 		wait := time.Until(b.getAvailableAt())
 		if wait <= 0 {
 			p.affinity.Store(affinityKey, i)
-			return b
+			return b, nil
 		}
 		if wait <= b.failoverThreshold {
 			slog.Debug("balance_waiting", "backend", b.name, "wait", wait)
-			time.Sleep(wait)
+			if err := sleepOrDone(ctx, wait); err != nil {
+				return nil, err
+			}
 			p.affinity.Store(affinityKey, i)
-			return b
+			return b, nil
 		}
 	}
 	// All backends busy/cooling down. Pick the one with shortest wait?
 	// For now return nil, trigger failover logic (which also checks availability)
-	return nil
+	return nil, nil
 }
 
 func (p *BalanceProvider) tryBackend(ctx context.Context, b *backend, req message.Request) (<-chan message.Event, error) {
@@ -249,7 +272,9 @@ func (p *BalanceProvider) failoverFrom(ctx context.Context, failed *backend, req
 		}
 		if wait > 0 {
 			slog.Debug("balance_failover_waiting", "backend", b.name, "wait", wait)
-			time.Sleep(wait)
+			if err := sleepOrDone(ctx, wait); err != nil {
+				return nil, err
+			}
 		}
 
 		slog.Info("balance_failover", "backend", b.name, "model", req.Model)
