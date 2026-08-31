@@ -111,7 +111,8 @@ func (s *Server) serveChatRequest(w http.ResponseWriter, r *http.Request, writer
 		if serveRateLimitError(r.Context(), w, writer, err) {
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// Generic message only — never leak backend err.Error() to clients.
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
