@@ -36,6 +36,29 @@ func TestToolToDefinitionAcceptsOpenAIShape(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolArguments(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty", in: "", want: "{}"},
+		{name: "object", in: `{"query":"x"}`, want: `{"query":"x"}`},
+		{name: "array", in: `[1,2]`, want: `[1,2]`},
+		{name: "encoded object", in: `"{\"query\":\"x\"}"`, want: `{"query":"x"}`},
+		{name: "plain string", in: `"hello"`, want: `{"input":"hello"}`},
+		{name: "blank string", in: `"   "`, want: `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(NormalizeToolArguments(json.RawMessage(tt.in)))
+			if got != tt.want {
+				t.Fatalf("got %s want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestToolToDefinitionKeepsExistingShape(t *testing.T) {
 	raw := []byte(`{
 		"type":"function",
