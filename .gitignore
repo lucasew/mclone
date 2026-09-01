@@ -1,0 +1,34 @@
+# Binaries
+mclone
+mclone.exe
+
+# Dependencies
+vendor/
+
+# Environment and secrets
+.env
+.env.local
+
+# Build artifacts
+*.out
+*.test
+*.prof
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+serve.log
+
+# Mise
+.mise.local.toml
+# Added by goreleaser init:
+dist/
