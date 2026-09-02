@@ -9,7 +9,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.2
 	codeberg.org/readeck/go-readability/v2 v2.1.1
 	github.com/anthropics/anthropic-sdk-go v1.22.0
-	github.com/goccy/go-json v0.10.5
+	github.com/goccy/go-json v0.10.6
 	github.com/klauspost/compress v1.18.4
 	github.com/mattn/godown v0.0.1
 	github.com/mitchellh/mapstructure v1.5.0
