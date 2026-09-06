@@ -85,14 +85,14 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 		option.WithHTTPClient(streamHTTPClient),
 	)
 
-	logOpenAIRequestDebug(ctx, req)
+	logOpenAIJSONDebug(ctx, "openai_request_debug", req)
 
 	params := sdk.ChatCompletionNewParams{
 		Model:    req.Model,
 		Messages: openaisdk.ToMessages(req.Turns),
 	}
 
-	logOpenAIParamsDebug(ctx, params)
+	logOpenAIJSONDebug(ctx, "openai_params_debug", params)
 
 	if req.Options.Temperature != nil {
 		params.Temperature = sdk.Float(*req.Options.Temperature)
@@ -177,28 +177,16 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req message.Request) (<-chan 
 	return out, nil
 }
 
-func logOpenAIRequestDebug(ctx context.Context, req message.Request) {
+func logOpenAIJSONDebug(ctx context.Context, msg string, v any) {
 	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
 		return
 	}
-	payload, err := json.MarshalIndent(req, "", "  ")
+	payload, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		slog.Debug("openai_request_debug_marshal_failed", "error", err)
+		slog.Debug(msg+"_marshal_failed", "error", err)
 		return
 	}
-	slog.Debug("openai_request_debug", "payload", string(payload))
-}
-
-func logOpenAIParamsDebug(ctx context.Context, params sdk.ChatCompletionNewParams) {
-	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
-		return
-	}
-	payload, err := json.MarshalIndent(params, "", "  ")
-	if err != nil {
-		slog.Debug("openai_params_debug_marshal_failed", "error", err)
-		return
-	}
-	slog.Debug("openai_params_debug", "payload", string(payload))
+	slog.Debug(msg, "payload", string(payload))
 }
 
 func shouldIgnoreStreamError(err error, sawContent, sawToolCall bool) bool {

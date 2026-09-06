@@ -25,6 +25,14 @@ func TestHTTPClientsUseSharedPackage(t *testing.T) {
 	}
 }
 
+func TestLogOpenAIJSONDebug(t *testing.T) {
+	t.Parallel()
+
+	logOpenAIJSONDebug(t.Context(), "openai_request_debug", map[string]string{"model": "gpt-4o"})
+	logOpenAIJSONDebug(t.Context(), "openai_params_debug", map[string]string{"model": "gpt-4o"})
+	logOpenAIJSONDebug(t.Context(), "openai_request_debug", make(chan int))
+}
+
 func TestShouldIgnoreStreamError(t *testing.T) {
 	t.Parallel()
 
