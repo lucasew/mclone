@@ -3,7 +3,7 @@
 go = "1.26.1"
 "go:golang.org/x/tools/gopls" = "0.21.0"
 goreleaser = "2.14.1"
-svu = "3.3.0"
+svu = "3.4.1"
 
 [tasks.install]
 description = "Install dependencies"
