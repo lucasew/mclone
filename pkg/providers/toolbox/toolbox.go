@@ -10,6 +10,7 @@ import (
 
 	"github.com/lucasew/mclone/pkg/message"
 	"github.com/lucasew/mclone/pkg/remote"
+	"github.com/lucasew/mclone/pkg/toolloop"
 	"github.com/lucasew/mclone/pkg/tools"
 )
 
@@ -88,126 +89,27 @@ func (p *ToolboxProvider) Chat(ctx context.Context, req message.Request) (<-chan
 		return nil, err
 	}
 
-	// Inject tool definitions, dedup by name (ours win)
-	ownNames := make(map[string]bool)
-	for _, t := range p.tools {
-		ownNames[strings.ToLower(t.Definition.Name)] = true
-	}
-	var cleanTools []message.ToolDefinition
-	for _, t := range req.Options.Tools {
-		if !ownNames[strings.ToLower(t.Name)] {
-			cleanTools = append(cleanTools, t)
-		}
-	}
-	for _, t := range p.tools {
-		cleanTools = append(cleanTools, t.Definition)
-	}
-	req.Options.Tools = cleanTools
+	req.Options.Tools = toolloop.MergeDefinitions(req.Options.Tools, p.tools)
 
-	out := make(chan message.Event)
-	go func() {
-		defer close(out)
-		currentTurns := make([]message.Turn, len(req.Turns))
-		copy(currentTurns, req.Turns)
-
-		for loop := range p.maxLoops {
-			req.Turns = currentTurns
-			ch, err := p.base.Chat(ctx, req)
-			if err != nil {
-				out <- message.ResponseError{Err: err}
-				return
-			}
-
-			var assistantParts []message.Part
-			var handledCalls []message.ToolCall
-			var passthroughCalls []message.ToolCall
-			completionReason := message.StopReasonEndTurn
-
-			for event := range ch {
-				switch ev := event.(type) {
-				case message.ResponseError:
-					out <- ev
-					return
-				case message.TextDelta:
-					out <- ev
-					assistantParts = append(assistantParts, message.TextPart{Text: ev.Text})
-				case message.ReasoningDelta:
-					out <- ev
-				case message.ToolCallFinished:
-					if _, ok := p.toolMap[strings.ToLower(ev.Call.Name)]; ok {
-						handledCalls = append(handledCalls, ev.Call)
-					} else {
-						passthroughCalls = append(passthroughCalls, ev.Call)
-					}
-				case message.ResponseCompleted:
-					completionReason = ev.Reason
-				}
-			}
-
-			// No handled calls — forward passthrough + done
-			if len(handledCalls) == 0 {
-				if len(passthroughCalls) > 0 {
-					for _, tc := range passthroughCalls {
-						out <- message.ToolCallFinished{Call: tc}
-					}
-				}
-				out <- message.ResponseCompleted{Reason: completionReason}
-				return
-			}
-
-			// Build assistant message with all tool call parts
-			for _, tc := range handledCalls {
-				assistantParts = append(assistantParts, message.ToolCallPart{
-					ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments,
-				})
-			}
-			for _, tc := range passthroughCalls {
-				assistantParts = append(assistantParts, message.ToolCallPart{
-					ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments,
-				})
-			}
-			currentTurns = append(currentTurns, message.Turn{
-				Role: message.RoleAssistant, Parts: assistantParts,
-			})
-
-			// Execute handled calls
-			for _, tc := range handledCalls {
-				tool := p.toolMap[strings.ToLower(tc.Name)]
-				slog.Info("toolbox_execute", "tool", tc.Name, "loop", loop)
-				slog.Debug("toolbox_call_args", "tool", tc.Name, "args", string(tc.Arguments))
-
-				result, err := tool.Execute(ctx, tc.Arguments)
-				if err != nil {
-					result = fmt.Sprintf("Error: %v", err)
-				}
-				slog.Debug("toolbox_call_result", "tool", tc.Name, "result_len", len(result), "result", result)
-				currentTurns = append(currentTurns, message.Turn{
-					Role: message.RoleTool,
-					Parts: []message.Part{message.ToolResultPart{
-						ToolCallID: tc.ID,
-						Content:    result,
-					}},
-				})
-			}
-
-			// Forward passthrough calls
-			if len(passthroughCalls) > 0 {
-				for _, tc := range passthroughCalls {
-					out <- message.ToolCallFinished{Call: tc}
-				}
-			}
-
-			slog.Info("toolbox_requery", "loop", loop+1, "handled", len(handledCalls))
-		}
-
-		// Exhausting the loop budget means the model kept requesting owned
-		// tools without producing a terminal reply. Completing with end_turn
-		// looks like success to clients; surface an error instead.
-		err := fmt.Errorf("%w: %d exceeded", ErrMaxLoops, p.maxLoops)
-		slog.Warn("toolbox_max_loops", "max", p.maxLoops)
-		out <- message.ResponseError{Err: err}
-	}()
-	return out, nil
+	// Exhausting the loop budget means the model kept requesting owned
+	// tools without producing a terminal reply. Completing with end_turn
+	// looks like success to clients; surface an error instead.
+	return toolloop.Run(ctx, req, toolloop.Config{
+		MaxLoops:           p.maxLoops,
+		ToolMap:            p.toolMap,
+		Chat:               p.base.Chat,
+		PreserveStopReason: true,
+		Exhausted:          fmt.Errorf("%w: %d exceeded", ErrMaxLoops, p.maxLoops),
+		RequeryMsg:         "toolbox_requery",
+		ExhaustedMsg:       "toolbox_max_loops",
+		BeforeExecute: func(loop int, call message.ToolCall) {
+			slog.Info("toolbox_execute", "tool", call.Name, "loop", loop)
+			slog.Debug("toolbox_call_args", "tool", call.Name, "args", string(call.Arguments))
+		},
+		AfterExecute: func(loop int, call message.ToolCall, result string) {
+			slog.Debug("toolbox_call_result", "tool", call.Name, "result_len", len(result), "result", result)
+		},
+	})
 }
 
 func init() {
