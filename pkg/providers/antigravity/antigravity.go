@@ -1154,40 +1154,7 @@ func isSupportedModel(model string) bool {
 }
 
 func sanitizeToolName(name string) string {
-	if name == "" {
-		return "tool"
-	}
-
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '_' || r == '-' || r == '.' || r == ':':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-		if b.Len() >= 128 {
-			break
-		}
-	}
-	sanitized := b.String()
-	if sanitized == "" {
-		return "tool"
-	}
-	first := sanitized[0]
-	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && first != '_' {
-		sanitized = "_" + sanitized
-	}
-	if len(sanitized) > 128 {
-		sanitized = sanitized[:128]
-	}
-	return sanitized
+	return gemini.SanitizeToolName(name, "tool")
 }
 
 func shouldFailoverEndpoint(endpoint string, body []byte) bool {

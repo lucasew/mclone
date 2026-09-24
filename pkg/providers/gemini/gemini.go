@@ -499,8 +499,16 @@ func ToGeminiTools(tools []message.ToolDefinition) []*genai.Tool {
 }
 
 func sanitizeGeminiToolName(name string, index int) string {
+	return SanitizeToolName(name, fmt.Sprintf("tool_%d", index))
+}
+
+// SanitizeToolName keeps letters, digits, and _ . : - in a Gemini-style tool name.
+// emptyFallback is used when name is empty or filters down to nothing.
+// The result is at most 128 bytes. A leading character other than a letter or _
+// is prefixed with _.
+func SanitizeToolName(name, emptyFallback string) string {
 	if name == "" {
-		name = fmt.Sprintf("tool_%d", index)
+		name = emptyFallback
 	}
 
 	var b strings.Builder
@@ -524,7 +532,7 @@ func sanitizeGeminiToolName(name string, index int) string {
 
 	sanitized := b.String()
 	if sanitized == "" {
-		return fmt.Sprintf("tool_%d", index)
+		return emptyFallback
 	}
 	first := sanitized[0]
 	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && first != '_' {
