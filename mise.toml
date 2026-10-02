@@ -1,0 +1,47 @@
+[tools]
+"github:lucasew/workspaced" = "0.2.2"
+go = "1.26.1"
+"go:golang.org/x/tools/gopls" = "0.21.0"
+goreleaser = "2.14.1"
+svu = "3.3.0"
+
+[tasks.install]
+description = "Install dependencies"
+run = "go mod download"
+
+[tasks.codegen]
+description = "Update generated code"
+run = "go generate ./..."
+
+[tasks.test]
+description = "Run tests"
+run = "go test -v ./..."
+
+[tasks.build]
+description = "Build the binary"
+run = "go build -o mclone ./cmd/mclone"
+
+[tasks.lint]
+description = "Run all linters"
+run = "workspaced codebase lint"
+
+[tasks.fmt]
+description = "Format all code"
+run = "workspaced codebase format"
+
+[tasks.ci]
+description = "Run CI pipeline"
+depends = ["lint", "test", "build"]
+
+[tasks.release]
+description = "Run a release"
+usage = '''
+arg "<version>" help="New version" {
+  choices "next" "major" "minor" "patch"
+  default "next"
+}
+'''
+run = '''
+git tag $(svu ${usage_version})
+goreleaser release --clean
+'''
